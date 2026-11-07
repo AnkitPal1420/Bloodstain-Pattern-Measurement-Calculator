@@ -1,0 +1,18 @@
+# Bloodstain Pattern Measurement Calculator Dependencies
+# Core web interface
+streamlit>=1.35.0
+
+# Scientific computing & data arrays
+numpy>=1.26.0
+
+# Data visualization & plotting
+matplotlib>=3.8.0
+
+# Computer vision (headless for server and desktop portability)
+opencv-python-headless>=4.9.0.80
+
+# PDF report generation
+reportlab>=4.2.0
+
+# Automated testing framework
+pytest>=8.0.0
