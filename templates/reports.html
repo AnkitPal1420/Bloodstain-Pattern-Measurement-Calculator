@@ -1,0 +1,319 @@
+{% extends "base.html" %}
+
+{% block title %}Forensic PDF Reports &amp; Cryptographic Registry{% endblock %}
+{% block breadcrumb %}Forensic Workspaces / PDF Report Registry{% if selected_report %} / {{ selected_report.report_id }}{% endif %}{% endblock %}
+
+{% block content %}
+<!-- Header Card -->
+<div class="card" style="margin-bottom: 20px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px;">
+        <div>
+            <h1 class="card-title" style="font-size: 18px;">
+                <span>📄</span> Forensic PDF Report Generation &amp; Cryptographic Registry
+            </h1>
+            <p style="color: var(--text-muted); font-size: 13px; margin-top: 4px;">
+                Generate publication-grade A4 forensic PDF reports with SHA-256 file integrity hashing, non-destructive revision tracking, and full chain-of-custody traceability.
+            </p>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+            <span class="badge" style="background-color: rgba(16,185,129,0.15); color: var(--status-active); border: 1px solid rgba(16,185,129,0.3);">
+                ReportLab A4 Engine v5.1
+            </span>
+            <span class="badge" style="background-color: rgba(56,189,248,0.15); color: #38bdf8; border: 1px solid rgba(56,189,248,0.3);">
+                SHA-256 Verified
+            </span>
+        </div>
+    </div>
+</div>
+
+{% if selected_report %}
+<!-- Single Report Metadata Preview & Integrity Inspection Card (GET /reports/<report_id>) -->
+<div class="card" style="margin-bottom: 22px; border: 1px solid rgba(56,189,248,0.4);">
+    <div class="card-header" style="margin-bottom: 14px; padding-bottom: 10px;">
+        <div>
+            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 4px;">
+                <span class="case-id-badge" style="color: #38bdf8;">{{ selected_report.report_id }}</span>
+                <span class="badge" style="background-color: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-subtle);">
+                    Revision R{{ selected_report.revision_number }}
+                </span>
+                {% if selected_report.report_status == 'FINAL' %}
+                    <span class="status-pill status-completed">● FINAL REPORT</span>
+                {% else %}
+                    <span class="status-pill status-review">● DRAFT REPORT</span>
+                {% endif %}
+            </div>
+            <h2 class="card-title" style="font-size: 16px;">{{ selected_report.report_title }}</h2>
+        </div>
+        <div style="display: flex; gap: 8px;">
+            <a href="{{ url_for('download_report_pdf', report_id=selected_report.report_id) }}" class="btn btn-primary btn-sm">
+                <span>⬇️</span> Download Verified PDF ({{ (selected_report.file_size / 1024)|round(1) }} KB)
+            </a>
+            <a href="{{ url_for('reports_dashboard') }}" class="btn btn-secondary btn-sm">
+                <span>✖</span> Close Preview
+            </a>
+        </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 14px; font-size: 12.5px;">
+        <div style="padding: 10px; background-color: var(--bg-surface); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+            <span style="color: var(--text-muted); font-size: 11px; display: block;">Report Type</span>
+            <strong>{{ selected_report.report_type }}</strong>
+        </div>
+        <div style="padding: 10px; background-color: var(--bg-surface); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+            <span style="color: var(--text-muted); font-size: 11px; display: block;">Associated Case / Reconstruction</span>
+            <strong>{{ selected_report.case_id or 'Standalone' }}</strong>
+            {% if selected_report.reconstruction_id %} / <code>{{ selected_report.reconstruction_id }}</code>{% endif %}
+        </div>
+        <div style="padding: 10px; background-color: var(--bg-surface); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+            <span style="color: var(--text-muted); font-size: 11px; display: block;">Examiner &amp; Laboratory</span>
+            <strong>{{ selected_report.examiner_name or 'Unspecified' }}</strong> ({{ selected_report.laboratory_name or 'Unspecified' }})
+        </div>
+        <div style="padding: 10px; background-color: var(--bg-surface); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+            <span style="color: var(--text-muted); font-size: 11px; display: block;">Generated Timestamp</span>
+            <strong style="font-family: var(--font-mono);">{{ selected_report.generated_at }}</strong>
+        </div>
+    </div>
+
+    <div style="padding: 12px; background-color: #070b12; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); font-size: 12px; margin-bottom: 10px;">
+        <div style="color: var(--text-muted); font-size: 11px; text-transform: uppercase; font-weight: 700; margin-bottom: 4px;">
+            🔐 PDF Document SHA-256 Cryptographic Digest
+        </div>
+        <code style="color: #4ade80; word-break: break-all; font-size: 12.5px;">{{ selected_report.sha256_hash }}</code>
+        <div style="margin-top: 6px; color: var(--text-muted); font-size: 11px;">
+            Source Measurement IDs: <code>{{ selected_report.source_measurement_ids or '[]' }}</code> &nbsp;|&nbsp;
+            Source Image IDs: <code>{{ selected_report.source_image_ids or '[]' }}</code>
+        </div>
+    </div>
+
+    {% if selected_report.examiner_observations %}
+        <div style="padding: 10px 12px; background-color: var(--bg-surface); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); font-size: 12.5px;">
+            <strong style="color: var(--text-secondary);">Examiner Observations:</strong> {{ selected_report.examiner_observations }}
+        </div>
+    {% endif %}
+</div>
+{% endif %}
+
+<!-- Three Report Generation Stations (Types A, B, and C) -->
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 18px; margin-bottom: 22px;">
+    <!-- Type C: Complete Forensic Case Report -->
+    <div class="card" style="margin-bottom: 0;">
+        <div class="card-header" style="margin-bottom: 12px; padding-bottom: 8px;">
+            <h2 class="card-title" style="font-size: 14.5px;">
+                <span>📁</span> 1. Complete Forensic Case Report
+            </h2>
+            <span class="badge" style="background-color: rgba(225,29,72,0.15); color: var(--crimson);">Type C</span>
+        </div>
+        <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
+            Combines all case evidence items, optical/manual measurements, and trajectory reconstructions for a selected case.
+        </p>
+        <form method="POST" action="{{ url_for('generate_report_dispatcher') }}">
+            <input type="hidden" name="dispatch_type" value="case">
+            <div class="form-group" style="margin-bottom: 10px;">
+                <label style="font-size: 11.5px;">Target Forensic Case:</label>
+                <select name="target_id" class="form-control" style="padding: 6px 8px; font-size: 12px;" required>
+                    {% for c in cases %}
+                        <option value="{{ c.case_id }}">{{ c.case_id }} — {{ c.title[:28] }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px;">
+                <div>
+                    <label style="font-size: 11px; color: var(--text-muted);">Report Status:</label>
+                    <select name="report_status" class="form-control" style="padding: 5px 8px; font-size: 12px;">
+                        <option value="DRAFT">DRAFT</option>
+                        <option value="FINAL">FINAL</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="font-size: 11px; color: var(--text-muted);">Examiner Name:</label>
+                    <input type="text" name="examiner_name" placeholder="Optional" class="form-control" style="padding: 5px 8px; font-size: 12px;">
+                </div>
+            </div>
+            <div class="form-group" style="margin-bottom: 10px;">
+                <label style="font-size: 11px; color: var(--text-muted);">Laboratory Name:</label>
+                <input type="text" name="laboratory_name" placeholder="e.g. Forensic BPA Unit" class="form-control" style="padding: 5px 8px; font-size: 12px;">
+            </div>
+            <div class="form-group" style="margin-bottom: 12px;">
+                <label style="font-size: 11px; color: var(--text-muted);">Examiner Observations:</label>
+                <textarea name="examiner_observations" rows="2" placeholder="Factual examination notes..." class="form-control" style="padding: 5px 8px; font-size: 12px;"></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary btn-sm" style="width: 100%;" {% if not cases %}disabled{% endif %}>
+                <span>📄</span> Generate Complete Case PDF
+            </button>
+        </form>
+    </div>
+
+    <!-- Type B: Trajectory Reconstruction Report -->
+    <div class="card" style="margin-bottom: 0;">
+        <div class="card-header" style="margin-bottom: 12px; padding-bottom: 8px;">
+            <h2 class="card-title" style="font-size: 14.5px;">
+                <span>🧭</span> 2. Trajectory Reconstruction Report
+            </h2>
+            <span class="badge" style="background-color: rgba(56,189,248,0.15); color: #38bdf8;">Type B</span>
+        </div>
+        <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
+            Generates a multi-stain 2D Area of Convergence &amp; 3D Area of Origin report with embedded reconstruction diagrams.
+        </p>
+        <form method="POST" action="{{ url_for('generate_report_dispatcher') }}">
+            <input type="hidden" name="dispatch_type" value="reconstruction">
+            <div class="form-group" style="margin-bottom: 10px;">
+                <label style="font-size: 11.5px;">Target Reconstruction Workspace:</label>
+                <select name="target_id" class="form-control" style="padding: 6px 8px; font-size: 12px;" required>
+                    {% for r in reconstructions %}
+                        <option value="{{ r.reconstruction_id }}">{{ r.reconstruction_id }} ({{ r.case_id }} — {{ r.status }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px;">
+                <div>
+                    <label style="font-size: 11px; color: var(--text-muted);">Report Status:</label>
+                    <select name="report_status" class="form-control" style="padding: 5px 8px; font-size: 12px;">
+                        <option value="DRAFT">DRAFT</option>
+                        <option value="FINAL">FINAL</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="font-size: 11px; color: var(--text-muted);">Examiner Name:</label>
+                    <input type="text" name="examiner_name" placeholder="Optional" class="form-control" style="padding: 5px 8px; font-size: 12px;">
+                </div>
+            </div>
+            <div class="form-group" style="margin-bottom: 10px;">
+                <label style="font-size: 11px; color: var(--text-muted);">Laboratory Name:</label>
+                <input type="text" name="laboratory_name" placeholder="e.g. Forensic BPA Unit" class="form-control" style="padding: 5px 8px; font-size: 12px;">
+            </div>
+            <div class="form-group" style="margin-bottom: 12px;">
+                <label style="font-size: 11px; color: var(--text-muted);">Examiner Observations:</label>
+                <textarea name="examiner_observations" rows="2" placeholder="Factual reconstruction notes..." class="form-control" style="padding: 5px 8px; font-size: 12px;"></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary btn-sm" style="width: 100%;" {% if not reconstructions %}disabled{% endif %}>
+                <span>📄</span> Generate Reconstruction PDF
+            </button>
+        </form>
+    </div>
+
+    <!-- Type A: Individual Bloodstain Examination Report -->
+    <div class="card" style="margin-bottom: 0;">
+        <div class="card-header" style="margin-bottom: 12px; padding-bottom: 8px;">
+            <h2 class="card-title" style="font-size: 14.5px;">
+                <span>📐</span> 3. Individual Stain Measurement Report
+            </h2>
+            <span class="badge" style="background-color: rgba(16,185,129,0.15); color: var(--status-active);">Type A</span>
+        </div>
+        <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
+            Generates a single-stain optical &amp; trigonometric examination report with original and fitted ellipse overlays.
+        </p>
+        <form method="POST" action="{{ url_for('generate_report_dispatcher') }}">
+            <input type="hidden" name="dispatch_type" value="measurement">
+            <div class="form-group" style="margin-bottom: 10px;">
+                <label style="font-size: 11.5px;">Target Bloodstain Measurement:</label>
+                <select name="target_id" class="form-control" style="padding: 6px 8px; font-size: 12px;" required>
+                    {% for m in measurements %}
+                        <option value="{{ m.id }}">#{{ m.id }} — {{ m.stain_label }} ({{ "%.2f"|format(m.angle_degrees) }}°, {{ m.case_id or 'Standalone' }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px;">
+                <div>
+                    <label style="font-size: 11px; color: var(--text-muted);">Report Status:</label>
+                    <select name="report_status" class="form-control" style="padding: 5px 8px; font-size: 12px;">
+                        <option value="DRAFT">DRAFT</option>
+                        <option value="FINAL">FINAL</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="font-size: 11px; color: var(--text-muted);">Examiner Name:</label>
+                    <input type="text" name="examiner_name" placeholder="Optional" class="form-control" style="padding: 5px 8px; font-size: 12px;">
+                </div>
+            </div>
+            <div class="form-group" style="margin-bottom: 10px;">
+                <label style="font-size: 11px; color: var(--text-muted);">Laboratory Name:</label>
+                <input type="text" name="laboratory_name" placeholder="e.g. Forensic BPA Unit" class="form-control" style="padding: 5px 8px; font-size: 12px;">
+            </div>
+            <div class="form-group" style="margin-bottom: 12px;">
+                <label style="font-size: 11px; color: var(--text-muted);">Examiner Observations:</label>
+                <textarea name="examiner_observations" rows="2" placeholder="Factual stain observations..." class="form-control" style="padding: 5px 8px; font-size: 12px;"></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary btn-sm" style="width: 100%;" {% if not measurements %}disabled{% endif %}>
+                <span>📄</span> Generate Individual Stain PDF
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- Generated Reports Registry Table -->
+<div class="card">
+    <div class="card-header" style="margin-bottom: 14px; padding-bottom: 10px;">
+        <h2 class="card-title" style="font-size: 15px;">
+            <span>🗂️</span> Generated Forensic PDF Reports Archive ({{ reports|length }} Record(s))
+        </h2>
+        <span style="font-size: 11.5px; color: var(--text-muted);">
+            All revisions preserved • Non-overwriting • SHA-256 Integrity Tracked
+        </span>
+    </div>
+
+    {% if reports %}
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Report ID</th>
+                        <th>Revision</th>
+                        <th>Status</th>
+                        <th>Report Type</th>
+                        <th>Case / Scope</th>
+                        <th>Examiner</th>
+                        <th>SHA-256 Digest</th>
+                        <th>Generated At</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in reports %}
+                        <tr>
+                            <td>
+                                <a href="{{ url_for('report_detail_view', report_id=r.report_id) }}" class="case-id-badge" style="text-decoration: none; color: #38bdf8;">
+                                    {{ r.report_id }}
+                                </a>
+                            </td>
+                            <td>
+                                <span class="badge" style="background-color: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-subtle); font-family: var(--font-mono);">
+                                    Rev R{{ r.revision_number }}
+                                </span>
+                            </td>
+                            <td>
+                                {% if r.report_status == 'FINAL' %}
+                                    <span class="status-pill status-completed">FINAL</span>
+                                {% else %}
+                                    <span class="status-pill status-review">DRAFT</span>
+                                {% endif %}
+                            </td>
+                            <td><strong>{{ r.report_type }}</strong></td>
+                            <td style="font-family: var(--font-mono); font-size: 12px;">
+                                {{ r.case_id or 'Standalone' }}
+                                {% if r.reconstruction_id %}<div style="font-size: 10.5px; color: var(--text-muted);">{{ r.reconstruction_id }}</div>{% endif %}
+                                {% if r.measurement_id %}<div style="font-size: 10.5px; color: var(--text-muted);">Meas #{{ r.measurement_id }}</div>{% endif %}
+                            </td>
+                            <td style="font-size: 12px;">{{ r.examiner_name or 'Unspecified' }}</td>
+                            <td>
+                                <code style="font-size: 11px; color: #4ade80;" title="{{ r.sha256_hash }}">
+                                    {{ r.sha256_hash[:12] }}...{{ r.sha256_hash[-6:] }}
+                                </code>
+                            </td>
+                            <td style="font-size: 11.5px; color: var(--text-muted);">{{ r.generated_at }}</td>
+                            <td style="white-space: nowrap;">
+                                <a href="{{ url_for('report_detail_view', report_id=r.report_id) }}" class="btn btn-secondary btn-sm">🔍 Inspect</a>
+                                <a href="{{ url_for('download_report_pdf', report_id=r.report_id) }}" class="btn btn-primary btn-sm">⬇️ PDF</a>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div style="text-align: center; padding: 26px; color: var(--text-muted);">
+            No forensic PDF reports have been generated yet. Use any of the three generation stations above to compile a report.
+        </div>
+    {% endif %}
+</div>
+{% endblock %}
+

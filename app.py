@@ -7,6 +7,7 @@ Provides interactive case management, physical evidence cataloging,
 and droplet impact angle calculations using elliptical geometry.
 """
 
+import json
 import os
 import shutil
 from datetime import datetime
@@ -26,8 +27,15 @@ from werkzeug.utils import secure_filename
 
 import database
 import image_processing
+import report_generator
+import trajectory
+import trajectory_integration
+import trajectory_visualization
 from calculator import InvalidMeasurementError, calculate_impact_angle
 from image_processing import ImageProcessingError
+from report_generator import ReportGenerationError
+from trajectory import StainTrajectoryInput, TrajectoryError
+from trajectory_integration import ReconstructionValidationError
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "bpa-forensic-lab-secret-2026")
@@ -36,10 +44,12 @@ app.config["MAX_CONTENT_LENGTH"] = image_processing.MAX_FILE_SIZE_BYTES
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_ORIGINAL_DIR = os.path.join(BASE_DIR, "uploads", "original")
 UPLOAD_PROCESSED_DIR = os.path.join(BASE_DIR, "uploads", "processed")
+UPLOAD_REPORTS_DIR = os.path.join(BASE_DIR, "uploads", "reports")
 SAMPLE_IMAGES_DIR = os.path.join(BASE_DIR, "sample_images")
 
 os.makedirs(UPLOAD_ORIGINAL_DIR, exist_ok=True)
 os.makedirs(UPLOAD_PROCESSED_DIR, exist_ok=True)
+os.makedirs(UPLOAD_REPORTS_DIR, exist_ok=True)
 
 # Initialize SQLite database schema and baseline data on load
 database.init_db()
@@ -449,9 +459,36 @@ def measurement_workspace():
     cal_y2 = request.values.get("cal_y2", "").strip()
     known_length_mm_raw = request.values.get("known_length_mm", "").strip()
 
+    # Phase 4.3 Directional & Surface Position Metadata
+    direction_angle_raw = request.values.get("direction_angle", "").strip()
+    surface_x_raw = request.values.get("surface_x_mm", "").strip()
+    surface_y_raw = request.values.get("surface_y_mm", "").strip()
+    surface_type = request.values.get("surface_type", "Horizontal Floor").strip() or "Horizontal Floor"
+
+    direction_angle_val = None
+    if direction_angle_raw:
+        try:
+            direction_angle_val = trajectory_integration.validate_direction_angle_input(direction_angle_raw)
+        except ReconstructionValidationError as dir_err:
+            vision_error = str(dir_err)
+
+    surface_x_val = None
+    if surface_x_raw:
+        try:
+            surface_x_val = float(surface_x_raw)
+        except ValueError:
+            vision_error = f"Invalid Surface X coordinate: '{surface_x_raw}'"
+
+    surface_y_val = None
+    if surface_y_raw:
+        try:
+            surface_y_val = float(surface_y_raw)
+        except ValueError:
+            vision_error = f"Invalid Surface Y coordinate: '{surface_y_raw}'"
+
     result = None
     error = None
-    vision_error = None
+    vision_error = vision_error if "vision_error" in locals() else None
     width = 5.0
     length = 10.0
     stain_label = request.values.get("stain_label", "Stain-01").strip() or "Stain-01"
@@ -493,6 +530,7 @@ def measurement_workspace():
                     scale_bar_points=scale_bar_points,
                     known_length_mm=known_length_mm,
                     stain_label=stain_label,
+                    direction_angle_deg=direction_angle_val,
                 )
                 processed_views = image_processing.save_processed_views(
                     pipeline_result=vision_data,
@@ -514,6 +552,17 @@ def measurement_workspace():
                 if ellipse.get("is_calibrated") and ellipse.get("width_mm") and ellipse.get("length_mm"):
                     width = ellipse["width_mm"]
                     length = ellipse["length_mm"]
+                    if surface_x_val is None and surface_y_val is None and vision_data.get("calibration"):
+                        surf_coords = trajectory.image_to_surface_coordinates(
+                            u_px=ellipse["center_x"],
+                            v_px=ellipse["center_y"],
+                            mm_per_pixel=vision_data["calibration"]["mm_per_pixel"],
+                            origin_u_px=0.0,
+                            origin_v_px=float(active_image["height_px"]),
+                            invert_y=True,
+                        )
+                        surface_x_val = round(surf_coords["surface_x_mm"], 2)
+                        surface_y_val = round(surf_coords["surface_y_mm"], 2)
                 else:
                     width = ellipse["minor_axis_px"]
                     length = ellipse["major_axis_px"]
@@ -592,6 +641,10 @@ def measurement_workspace():
                     ellipse_center_y=ellipse_cy,
                     ellipse_angle=ellipse_ang,
                     calibration_status=cal_status,
+                    direction_angle=direction_angle_val,
+                    surface_x_mm=surface_x_val,
+                    surface_y_mm=surface_y_val,
+                    surface_type=surface_type,
                 )
 
                 if selected_evidence:
@@ -628,6 +681,10 @@ def measurement_workspace():
         cal_y2=cal_y2,
         known_length_mm=known_length_mm_raw,
         stain_label=stain_label,
+        direction_angle=direction_angle_val,
+        surface_x_mm=surface_x_val,
+        surface_y_mm=surface_y_val,
+        surface_type=surface_type,
         result=result,
         error=error,
         width=width,
@@ -660,6 +717,665 @@ def results_dashboard():
         measurements=measurements,
         selected_case=case_filter,
     )
+
+
+# ===========================================================================
+# 3D Trajectory Reconstruction Laboratory (Phase 4.2)
+# ===========================================================================
+
+TRAJECTORY_PRESETS = {
+    "floor_radial": {
+        "surface_type": "Horizontal Floor",
+        "incline_deg": None,
+        "stains": [
+            {"stain_id": "Stain-01", "width": 7.07, "length": 10.0, "surface_x_mm": 400.0, "surface_y_mm": 150.0, "gamma_deg": 0.0, "sigma_gamma_deg": 2.0},
+            {"stain_id": "Stain-02", "width": 7.07, "length": 10.0, "surface_x_mm": 100.0, "surface_y_mm": 450.0, "gamma_deg": 90.0, "sigma_gamma_deg": 2.0},
+            {"stain_id": "Stain-03", "width": 7.28, "length": 10.0, "surface_x_mm": 300.0, "surface_y_mm": 350.0, "gamma_deg": 45.0, "sigma_gamma_deg": 2.0},
+        ],
+    },
+    "vertical_wall": {
+        "surface_type": "Vertical Wall",
+        "incline_deg": None,
+        "stains": [
+            {"stain_id": "Wall-S1", "width": 5.50, "length": 10.0, "surface_x_mm": 520.0, "surface_y_mm": 220.0, "gamma_deg": 15.0, "sigma_gamma_deg": 2.0},
+            {"stain_id": "Wall-S2", "width": 6.10, "length": 10.0, "surface_x_mm": 480.0, "surface_y_mm": 390.0, "gamma_deg": 52.0, "sigma_gamma_deg": 2.0},
+            {"stain_id": "Wall-S3", "width": 5.85, "length": 10.0, "surface_x_mm": 210.0, "surface_y_mm": 410.0, "gamma_deg": 118.0, "sigma_gamma_deg": 2.0},
+            {"stain_id": "Wall-S4", "width": 5.30, "length": 10.0, "surface_x_mm": 160.0, "surface_y_mm": 240.0, "gamma_deg": 158.0, "sigma_gamma_deg": 2.0},
+        ],
+    },
+    "inclined_45": {
+        "surface_type": "Inclined Surface (45°)",
+        "incline_deg": 45.0,
+        "stains": [
+            {"stain_id": "Inc-01", "width": 6.00, "length": 10.0, "surface_x_mm": 380.0, "surface_y_mm": 180.0, "gamma_deg": 12.0, "sigma_gamma_deg": 2.5},
+            {"stain_id": "Inc-02", "width": 6.45, "length": 10.0, "surface_x_mm": 290.0, "surface_y_mm": 340.0, "gamma_deg": 55.0, "sigma_gamma_deg": 2.5},
+            {"stain_id": "Inc-03", "width": 5.80, "length": 10.0, "surface_x_mm": 110.0, "surface_y_mm": 320.0, "gamma_deg": 115.0, "sigma_gamma_deg": 2.5},
+        ],
+    },
+}
+
+
+@app.route("/trajectory", methods=["GET", "POST"])
+def trajectory_laboratory():
+    """
+    3D Trajectory Reconstruction & 2D Area of Convergence Visualization Laboratory.
+    """
+    all_cases = database.get_all_cases()
+    preset_key = request.args.get("preset", "floor_radial").strip()
+    if preset_key not in TRAJECTORY_PRESETS:
+        preset_key = "floor_radial"
+
+    preset = TRAJECTORY_PRESETS[preset_key]
+    surface_type = preset["surface_type"]
+    incline_deg = preset["incline_deg"]
+    input_rows = [dict(r) for r in preset["stains"]]
+    selected_case = request.values.get("case_id", "").strip()
+    reconstruction_id = request.values.get("reconstruction_id", "").strip()
+    traj_error = None
+
+    if request.method == "GET" and (reconstruction_id or selected_case):
+        rec_rows = []
+        if reconstruction_id:
+            rec_obj = database.get_reconstruction_by_id(reconstruction_id)
+            if rec_obj:
+                selected_case = rec_obj["case_id"]
+                surface_type = rec_obj.get("surface_type") or surface_type
+                rec_rows = database.get_stains_for_reconstruction(reconstruction_id)
+        elif selected_case:
+            recons = database.get_reconstructions_for_case(selected_case)
+            if recons:
+                rec_obj = recons[0]
+                surface_type = rec_obj.get("surface_type") or surface_type
+                rec_rows = database.get_stains_for_reconstruction(rec_obj["reconstruction_id"])
+
+        valid_rec = [
+            r for r in rec_rows
+            if r.get("direction_angle") is not None
+            and r.get("surface_x_mm") is not None
+            and r.get("surface_y_mm") is not None
+            and not r.get("is_perpendicular")
+        ]
+        if len(valid_rec) >= 2:
+            input_rows = [
+                {
+                    "stain_id": r["stain_identifier"],
+                    "width": r["width"],
+                    "length": r["length"],
+                    "surface_x_mm": r["surface_x_mm"],
+                    "surface_y_mm": r["surface_y_mm"],
+                    "gamma_deg": r["direction_angle"],
+                    "sigma_gamma_deg": 2.0,
+                }
+                for r in valid_rec
+            ]
+
+    if request.method == "POST":
+        surface_type = request.form.get("surface_type", "Horizontal Floor").strip()
+        inc_raw = request.form.get("incline_deg", "").strip()
+        if inc_raw:
+            try:
+                incline_deg = float(inc_raw)
+            except ValueError:
+                traj_error = f"Invalid custom incline angle: '{inc_raw}'"
+                incline_deg = None
+        else:
+            incline_deg = None
+
+        if request.form.get("load_case_stains") == "true" and selected_case:
+            case_meas = database.get_recent_measurements(limit=30, case_id=selected_case)
+            valid_rows = [
+                m for m in case_meas
+                if m.get("direction_angle") is not None
+                and m.get("surface_x_mm") is not None
+                and m.get("surface_y_mm") is not None
+                and not m.get("is_perpendicular")
+            ]
+            if len(valid_rows) >= 2:
+                input_rows = [
+                    {
+                        "stain_id": m["stain_label"],
+                        "width": m["width"],
+                        "length": m["length"],
+                        "surface_x_mm": m["surface_x_mm"],
+                        "surface_y_mm": m["surface_y_mm"],
+                        "gamma_deg": m["direction_angle"],
+                        "sigma_gamma_deg": 2.0,
+                    }
+                    for m in valid_rows
+                ]
+                if valid_rows[0].get("surface_type"):
+                    surface_type = valid_rows[0]["surface_type"]
+            else:
+                traj_error = (
+                    f"Case '{selected_case}' has fewer than 2 saved non-perpendicular stains with "
+                    "supplied direction_angle and surface coordinates (X_s, Y_s)."
+                )
+        else:
+            stain_ids = request.form.getlist("stain_id")
+            widths = request.form.getlist("width")
+            lengths = request.form.getlist("length")
+            xs = request.form.getlist("surface_x_mm")
+            ys = request.form.getlist("surface_y_mm")
+            gammas = request.form.getlist("gamma_deg")
+            sigmas = request.form.getlist("sigma_gamma_deg")
+
+            parsed_rows = []
+            for i in range(len(stain_ids)):
+                parsed_rows.append({
+                    "stain_id": stain_ids[i].strip() or f"Stain-{i+1:02d}",
+                    "width": widths[i].strip() if i < len(widths) else "",
+                    "length": lengths[i].strip() if i < len(lengths) else "",
+                    "surface_x_mm": xs[i].strip() if i < len(xs) else "",
+                    "surface_y_mm": ys[i].strip() if i < len(ys) else "",
+                    "gamma_deg": gammas[i].strip() if i < len(gammas) else "",
+                    "sigma_gamma_deg": sigmas[i].strip() if i < len(sigmas) and sigmas[i].strip() else "2.0",
+                })
+            if parsed_rows:
+                input_rows = parsed_rows
+
+    # Build StainTrajectoryInput objects and render visualizations
+    scene = None
+    scene_json = "{}"
+    plot_2d_b64 = None
+    plot_3d_b64 = None
+
+    if not traj_error:
+        try:
+            stain_objs = []
+            for r in input_rows:
+                gamma_val = None if (r["gamma_deg"] is None or str(r["gamma_deg"]).strip() == "") else float(r["gamma_deg"])
+                stain_objs.append(
+                    StainTrajectoryInput(
+                        stain_id=str(r["stain_id"]),
+                        width=float(r["width"]),
+                        length=float(r["length"]),
+                        surface_x_mm=float(r["surface_x_mm"]),
+                        surface_y_mm=float(r["surface_y_mm"]),
+                        gamma_deg=gamma_val,
+                        sigma_gamma_deg=float(r.get("sigma_gamma_deg", 2.0)),
+                    )
+                )
+
+            vis_2d = trajectory_visualization.render_2d_convergence_plot(
+                stains=stain_objs,
+                surface_type=surface_type,
+            )
+            vis_3d = trajectory_visualization.render_3d_trajectory_plot(
+                stains=stain_objs,
+                surface_type=surface_type,
+                incline_deg=incline_deg,
+            )
+            scene = vis_3d["scene"]
+            scene_json = json.dumps(scene)
+            plot_2d_b64 = vis_2d["base64_png"]
+            plot_3d_b64 = vis_3d["base64_png"]
+        except (TrajectoryError, ValueError, TypeError) as err:
+            traj_error = str(err)
+        except Exception as exc:
+            traj_error = f"Unexpected trajectory visualization error: {exc}"
+
+    return render_template(
+        "trajectory_lab.html",
+        active_page="trajectory",
+        cases=all_cases,
+        selected_case=selected_case,
+        surface_type=surface_type,
+        incline_deg=incline_deg,
+        input_rows=input_rows,
+        scene=scene,
+        scene_json=scene_json,
+        plot_2d_b64=plot_2d_b64,
+        plot_3d_b64=plot_3d_b64,
+        traj_error=traj_error,
+    )
+
+
+# ===========================================================================
+# Phase 4.3: Measurement Integration & Case Trajectory Reconstruction Routes
+# ===========================================================================
+
+
+@app.route("/reconstruction/<case_id>", methods=["GET"])
+def reconstruction_workspace(case_id: str):
+    """
+    Display the Case Trajectory Reconstruction Workspace.
+    Allows examiners to select measurements, inspect calibration and eligibility,
+    record surface coordinates and directionality, and calculate 2D/3D convergence.
+    """
+    reconstruction_id = request.args.get("reconstruction_id", "").strip() or None
+    try:
+        state = trajectory_integration.get_workspace_state(
+            case_id=case_id,
+            reconstruction_id=reconstruction_id,
+        )
+    except ReconstructionValidationError as err:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": str(err)}), 404
+        flash(str(err), "danger")
+        return redirect(url_for("cases_list"))
+
+    # If a previous calculation exists, render static 2D/3D plots for eligible stains
+    plot_2d_b64 = None
+    plot_3d_b64 = None
+    if state["latest_result"] and state["can_calculate"]:
+        try:
+            stain_objs = [
+                StainTrajectoryInput(
+                    stain_id=str(s["stain_identifier"]),
+                    width=float(s["width"]),
+                    length=float(s["length"]),
+                    surface_x_mm=float(s["surface_x_mm"]),
+                    surface_y_mm=float(s["surface_y_mm"]),
+                    gamma_deg=float(s["direction_angle"]),
+                    sigma_gamma_deg=2.0,
+                )
+                for s in state["selected_stains"]
+            ]
+            surf_type = state["reconstruction"].get("surface_type") or "Horizontal Floor"
+            vis_2d = trajectory_visualization.render_2d_convergence_plot(
+                stains=stain_objs,
+                surface_type=surf_type,
+            )
+            vis_3d = trajectory_visualization.render_3d_trajectory_plot(
+                stains=stain_objs,
+                surface_type=surf_type,
+            )
+            plot_2d_b64 = vis_2d["base64_png"]
+            plot_3d_b64 = vis_3d["base64_png"]
+        except Exception:
+            pass
+
+    return render_template(
+        "reconstruction.html",
+        active_page="cases",
+        case=state["case"],
+        workspace=state,
+        active_scene=state["latest_scene"],
+        plot_2d_b64=plot_2d_b64,
+        plot_3d_b64=plot_3d_b64,
+    )
+
+
+@app.route("/reconstruction/<case_id>/add-measurement", methods=["POST"])
+def reconstruction_add_measurement(case_id: str):
+    """Associate a saved case measurement with the case's trajectory reconstruction workspace."""
+    reconstruction_id = request.form.get("reconstruction_id", "").strip() or None
+    measurement_id_raw = request.form.get("measurement_id", "").strip()
+    stain_identifier = request.form.get("stain_identifier", "").strip() or None
+    surface_x_raw = request.form.get("surface_x_mm", "").strip() or None
+    surface_y_raw = request.form.get("surface_y_mm", "").strip() or None
+    direction_angle_raw = request.form.get("direction_angle", "").strip() or None
+    direction_source = request.form.get("direction_source", "").strip() or None
+
+    try:
+        if not measurement_id_raw:
+            raise ReconstructionValidationError("Measurement ID is required to add a stain to the workspace.")
+        measurement_id = int(measurement_id_raw)
+        rec = trajectory_integration.get_or_create_case_reconstruction(case_id, reconstruction_id)
+        added = trajectory_integration.add_measurement_to_case_reconstruction(
+            case_id=case_id,
+            reconstruction_id=rec["reconstruction_id"],
+            measurement_id=measurement_id,
+            stain_identifier=stain_identifier,
+            surface_x_mm=surface_x_raw,
+            surface_y_mm=surface_y_raw,
+            direction_angle=direction_angle_raw,
+            direction_source=direction_source,
+        )
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "ok", "stain": added}), 201
+        flash(f"Added stain '{added['stain_identifier']}' (Measurement #{measurement_id}) to reconstruction.", "success")
+    except (ReconstructionValidationError, ValueError) as err:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": str(err)}), 400
+        flash(f"Could not add measurement: {err}", "danger")
+
+    return redirect(url_for("reconstruction_workspace", case_id=case_id, reconstruction_id=reconstruction_id))
+
+
+@app.route("/reconstruction/<case_id>/remove-measurement", methods=["POST"])
+def reconstruction_remove_measurement(case_id: str):
+    """Remove a measurement from the case's trajectory reconstruction workspace."""
+    reconstruction_id = request.form.get("reconstruction_id", "").strip() or None
+    measurement_id_raw = request.form.get("measurement_id", "").strip()
+
+    try:
+        if not measurement_id_raw:
+            raise ReconstructionValidationError("Measurement ID is required to remove a stain from the workspace.")
+        measurement_id = int(measurement_id_raw)
+        rec = trajectory_integration.get_or_create_case_reconstruction(case_id, reconstruction_id)
+        trajectory_integration.remove_measurement_from_case_reconstruction(
+            case_id=case_id,
+            reconstruction_id=rec["reconstruction_id"],
+            measurement_id=measurement_id,
+        )
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "ok", "removed_measurement_id": measurement_id}), 200
+        flash(f"Removed Measurement #{measurement_id} from reconstruction workspace.", "info")
+    except (ReconstructionValidationError, ValueError) as err:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": str(err)}), 400
+        flash(f"Could not remove measurement: {err}", "danger")
+
+    return redirect(url_for("reconstruction_workspace", case_id=case_id, reconstruction_id=reconstruction_id))
+
+
+@app.route("/reconstruction/<case_id>/update-stain", methods=["POST"])
+def reconstruction_update_stain(case_id: str):
+    """Update directional angle, surface position coordinates, or label for a workspace stain."""
+    reconstruction_id = request.form.get("reconstruction_id", "").strip() or None
+    measurement_id_raw = request.form.get("measurement_id", "").strip()
+    stain_identifier = request.form.get("stain_identifier", "").strip() or None
+    surface_x_raw = request.form.get("surface_x_mm", "").strip()
+    surface_y_raw = request.form.get("surface_y_mm", "").strip()
+    direction_angle_raw = request.form.get("direction_angle", "").strip()
+    direction_source = request.form.get("direction_source", "").strip() or "Examiner Visual Inspection"
+
+    try:
+        if not measurement_id_raw:
+            raise ReconstructionValidationError("Measurement ID is required to update stain parameters.")
+        measurement_id = int(measurement_id_raw)
+        rec = trajectory_integration.get_or_create_case_reconstruction(case_id, reconstruction_id)
+        updated = trajectory_integration.update_stain_in_case_reconstruction(
+            case_id=case_id,
+            reconstruction_id=rec["reconstruction_id"],
+            measurement_id=measurement_id,
+            stain_identifier=stain_identifier,
+            surface_x_mm=surface_x_raw if surface_x_raw != "" else None,
+            surface_y_mm=surface_y_raw if surface_y_raw != "" else None,
+            direction_angle=direction_angle_raw if direction_angle_raw != "" else None,
+            direction_source=direction_source,
+        )
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "ok", "stain": updated}), 200
+        flash(f"Updated parameters for stain '{updated['stain_identifier']}'.", "success")
+    except (ReconstructionValidationError, ValueError) as err:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": str(err)}), 400
+        flash(f"Stain update failed: {err}", "danger")
+
+    return redirect(url_for("reconstruction_workspace", case_id=case_id, reconstruction_id=reconstruction_id))
+
+
+@app.route("/reconstruction/<case_id>/calculate", methods=["POST"])
+def reconstruction_calculate(case_id: str):
+    """
+    Validate all stains in the reconstruction workspace, run 2D Area of Convergence
+    and 3D Area of Origin via trajectory.py, and persist results to SQLite.
+    """
+    reconstruction_id = request.form.get("reconstruction_id", "").strip() or None
+    surface_type = request.form.get("surface_type", "").strip() or None
+    incline_raw = request.form.get("incline_deg", "").strip()
+    notes = request.form.get("notes", "").strip() or None
+
+    incline_deg = None
+    if incline_raw:
+        try:
+            incline_deg = float(incline_raw)
+        except ValueError:
+            msg = f"Invalid incline angle: '{incline_raw}'"
+            if request.headers.get("Accept") == "application/json":
+                return jsonify({"status": "error", "error": msg}), 400
+            flash(msg, "danger")
+            return redirect(url_for("reconstruction_workspace", case_id=case_id, reconstruction_id=reconstruction_id))
+
+    try:
+        rec = trajectory_integration.get_or_create_case_reconstruction(case_id, reconstruction_id)
+        calc_output = trajectory_integration.execute_case_reconstruction(
+            case_id=case_id,
+            reconstruction_id=rec["reconstruction_id"],
+            surface_type=surface_type,
+            incline_deg=incline_deg,
+        )
+        if request.headers.get("Accept") == "application/json":
+            return jsonify(
+                {
+                    "status": "ok",
+                    "reconstruction": calc_output["reconstruction"],
+                    "result": calc_output["result"],
+                }
+            ), 200
+        flash(
+            f"Trajectory Reconstruction {rec['reconstruction_id']} computed and saved "
+            f"({calc_output['result']['stain_count']} stains).",
+            "success",
+        )
+    except ReconstructionValidationError as err:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": str(err)}), 400
+        flash(f"Reconstruction Validation Error: {err}", "danger")
+    except Exception as exc:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": str(exc)}), 500
+        flash(f"Unexpected reconstruction calculation error: {exc}", "danger")
+
+    return redirect(url_for("reconstruction_workspace", case_id=case_id, reconstruction_id=reconstruction_id))
+
+
+@app.route("/reconstruction/<case_id>/results", methods=["GET"])
+def reconstruction_results_view(case_id: str):
+    """
+    Retrieve the latest persisted trajectory reconstruction results for a case.
+    Returns structured JSON when requested via Accept: application/json, or renders the workspace.
+    """
+    reconstruction_id = request.args.get("reconstruction_id", "").strip() or None
+    try:
+        state = trajectory_integration.get_workspace_state(
+            case_id=case_id,
+            reconstruction_id=reconstruction_id,
+        )
+    except ReconstructionValidationError as err:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": str(err)}), 404
+        flash(str(err), "danger")
+        return redirect(url_for("cases_list"))
+
+    if request.headers.get("Accept") == "application/json":
+        return jsonify(
+            {
+                "status": "ok",
+                "case_id": case_id,
+                "reconstruction": state["reconstruction"],
+                "stains": state["selected_stains"],
+                "latest_result": state["latest_result"],
+            }
+        ), 200
+
+    return redirect(url_for("reconstruction_workspace", case_id=case_id, reconstruction_id=reconstruction_id))
+
+
+# ===========================================================================
+# Phase 4.4: Professional Forensic PDF Report Generation & Archive Routes
+# ===========================================================================
+
+
+def _render_reports_page(selected_report=None):
+    """Helper to render the Forensic PDF Reports dashboard."""
+    all_cases = database.get_all_cases()
+    all_measurements = database.get_recent_measurements(limit=100)
+    all_reconstructions = []
+    for c in all_cases:
+        all_reconstructions.extend(database.get_reconstructions_for_case(c["case_id"]))
+    reports = database.get_all_reports(limit=100)
+    return render_template(
+        "reports.html",
+        active_page="reports",
+        cases=all_cases,
+        measurements=all_measurements,
+        reconstructions=all_reconstructions,
+        reports=reports,
+        selected_report=selected_report,
+    )
+
+
+@app.route("/reports", methods=["GET"])
+def reports_dashboard():
+    """Display the Forensic PDF Report Generator & Archive Registry."""
+    if request.headers.get("Accept") == "application/json":
+        return jsonify({"status": "ok", "reports": database.get_all_reports(limit=100)}), 200
+    return _render_reports_page(selected_report=None)
+
+
+@app.route("/reports/generate", methods=["POST"])
+def generate_report_dispatcher():
+    """Form dispatcher for the 3 report generation stations on /reports."""
+    dispatch_type = request.form.get("dispatch_type", "").strip().lower()
+    target_id = request.form.get("target_id", "").strip()
+    if dispatch_type == "measurement":
+        return generate_measurement_report_route(target_id)
+    if dispatch_type == "reconstruction":
+        return generate_reconstruction_report_route(target_id)
+    if dispatch_type == "case":
+        return generate_case_report_route(target_id)
+    flash("Please select a valid report type and target identifier.", "danger")
+    return redirect(url_for("reports_dashboard"))
+
+
+@app.route("/reports/generate/measurement/<measurement_id>", methods=["POST"])
+def generate_measurement_report_route(measurement_id: str):
+    """Generate a Type A Individual Bloodstain Examination PDF Report."""
+    report_status = request.form.get("report_status", "DRAFT").strip()
+    examiner_name = request.form.get("examiner_name", "").strip() or None
+    laboratory_name = request.form.get("laboratory_name", "").strip() or None
+    examiner_observations = request.form.get("examiner_observations", "").strip() or None
+
+    try:
+        record = report_generator.generate_measurement_report(
+            measurement_id=measurement_id,
+            output_dir=UPLOAD_REPORTS_DIR,
+            report_status=report_status,
+            examiner_name=examiner_name,
+            laboratory_name=laboratory_name,
+            examiner_observations=examiner_observations,
+        )
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "ok", "report": record}), 201
+        flash(
+            f"Forensic Measurement Report {record['report_id']} (Rev R{record['revision_number']}, {record['report_status']}) generated.",
+            "success",
+        )
+        return redirect(url_for("report_detail_view", report_id=record["report_id"]))
+    except ReportGenerationError as err:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": str(err)}), 400
+        flash(f"Report Generation Failed: {err}", "danger")
+        return redirect(url_for("reports_dashboard"))
+
+
+@app.route("/reports/generate/reconstruction/<reconstruction_id>", methods=["POST"])
+def generate_reconstruction_report_route(reconstruction_id: str):
+    """Generate a Type B Multiple Bloodstain Trajectory Reconstruction PDF Report."""
+    report_status = request.form.get("report_status", "DRAFT").strip()
+    examiner_name = request.form.get("examiner_name", "").strip() or None
+    laboratory_name = request.form.get("laboratory_name", "").strip() or None
+    examiner_observations = request.form.get("examiner_observations", "").strip() or None
+
+    try:
+        record = report_generator.generate_reconstruction_report(
+            reconstruction_id=reconstruction_id,
+            output_dir=UPLOAD_REPORTS_DIR,
+            report_status=report_status,
+            examiner_name=examiner_name,
+            laboratory_name=laboratory_name,
+            examiner_observations=examiner_observations,
+        )
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "ok", "report": record}), 201
+        flash(
+            f"Trajectory Reconstruction Report {record['report_id']} (Rev R{record['revision_number']}, {record['report_status']}) generated.",
+            "success",
+        )
+        return redirect(url_for("report_detail_view", report_id=record["report_id"]))
+    except ReportGenerationError as err:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": str(err)}), 400
+        flash(f"Report Generation Failed: {err}", "danger")
+        return redirect(url_for("reports_dashboard"))
+
+
+@app.route("/reports/generate/case/<case_id>", methods=["POST"])
+def generate_case_report_route(case_id: str):
+    """Generate a Type C Complete Forensic Case PDF Report."""
+    report_status = request.form.get("report_status", "DRAFT").strip()
+    examiner_name = request.form.get("examiner_name", "").strip() or None
+    laboratory_name = request.form.get("laboratory_name", "").strip() or None
+    examiner_observations = request.form.get("examiner_observations", "").strip() or None
+
+    try:
+        record = report_generator.generate_case_report(
+            case_id=case_id,
+            output_dir=UPLOAD_REPORTS_DIR,
+            report_status=report_status,
+            examiner_name=examiner_name,
+            laboratory_name=laboratory_name,
+            examiner_observations=examiner_observations,
+        )
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "ok", "report": record}), 201
+        flash(
+            f"Complete Forensic Case Report {record['report_id']} (Rev R{record['revision_number']}, {record['report_status']}) generated.",
+            "success",
+        )
+        return redirect(url_for("report_detail_view", report_id=record["report_id"]))
+    except ReportGenerationError as err:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": str(err)}), 400
+        flash(f"Report Generation Failed: {err}", "danger")
+        return redirect(url_for("reports_dashboard"))
+
+
+@app.route("/reports/<path:report_id>/download", methods=["GET"])
+def download_report_pdf(report_id: str):
+    """
+    Securely serve a generated forensic PDF report by report_id.
+    Blocks path traversal and verifies SHA-256 binary integrity before serving.
+    """
+    safe_id = secure_filename(report_id)
+    if not safe_id or safe_id != report_id or ".." in report_id or "/" in report_id or "\\" in report_id:
+        abort(404)
+
+    record = database.get_report_by_id(safe_id)
+    if not record:
+        abort(404)
+
+    safe_filename = secure_filename(record["filename"])
+    if not safe_filename or safe_filename != record["filename"]:
+        abort(404)
+
+    filepath = record["filepath"]
+    if not filepath or not os.path.isfile(filepath):
+        abort(404)
+
+    directory = os.path.dirname(os.path.abspath(filepath))
+    return send_from_directory(
+        directory,
+        safe_filename,
+        as_attachment=True,
+        download_name=safe_filename,
+        mimetype="application/pdf",
+    )
+
+
+@app.route("/reports/<path:report_id>", methods=["GET"])
+def report_detail_view(report_id: str):
+    """Inspect metadata and SHA-256 traceability for a generated forensic report."""
+    safe_id = secure_filename(report_id)
+    if not safe_id or safe_id != report_id or ".." in report_id or "/" in report_id or "\\" in report_id:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": "Invalid report ID."}), 404
+        abort(404)
+
+    record = database.get_report_by_id(safe_id)
+    if not record:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": f"Report '{report_id}' not found."}), 404
+        flash(f"Report '{report_id}' was not found in the archive.", "danger")
+        return redirect(url_for("reports_dashboard"))
+
+    if request.headers.get("Accept") == "application/json":
+        return jsonify({"status": "ok", "report": record}), 200
+
+    return _render_reports_page(selected_report=record)
 
 
 if __name__ == "__main__":

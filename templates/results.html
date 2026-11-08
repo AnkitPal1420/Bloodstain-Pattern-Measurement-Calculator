@@ -14,8 +14,11 @@
                 Comprehensive overview of calculated bloodstain geometries, recorded trajectories, and analytical reconstruction stages.
             </p>
         </div>
-        <div>
-            <a href="{{ url_for('measurement_workspace') }}" class="btn btn-primary">
+        <div style="display: flex; gap: 10px;">
+            <a href="{{ url_for('trajectory_laboratory') }}" class="btn btn-primary">
+                <span>🧭</span> Launch 3D Trajectory Lab
+            </a>
+            <a href="{{ url_for('measurement_workspace') }}" class="btn btn-secondary">
                 <span>📐</span> Open Measurement Lab
             </a>
         </div>

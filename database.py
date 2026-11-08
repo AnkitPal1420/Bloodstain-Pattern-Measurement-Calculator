@@ -142,6 +142,111 @@ def init_db(seed_demo: bool = False) -> None:
         """
     )
 
+    # 5. Trajectory Reconstructions table (Phase 4.3 Multi-Stain Workspace)
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reconstructions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            reconstruction_id TEXT UNIQUE NOT NULL,
+            case_id TEXT NOT NULL,
+            reconstruction_name TEXT NOT NULL,
+            surface_type TEXT NOT NULL DEFAULT 'Horizontal Floor',
+            incline_deg REAL,
+            status TEXT NOT NULL DEFAULT 'Draft',
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (case_id) REFERENCES cases (case_id) ON DELETE CASCADE
+        );
+        """
+    )
+
+    # 6. Reconstruction Stains association table (prevents duplicate measurement links)
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reconstruction_stains (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            reconstruction_id TEXT NOT NULL,
+            measurement_id INTEGER NOT NULL,
+            stain_identifier TEXT NOT NULL,
+            surface_x_mm REAL,
+            surface_y_mm REAL,
+            direction_angle REAL,
+            surface_type TEXT DEFAULT 'Horizontal Floor',
+            direction_source TEXT DEFAULT 'Examiner Supplied (Tail/Spine Morphology)',
+            sigma_gamma_deg REAL DEFAULT 2.0,
+            examiner_notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (reconstruction_id, measurement_id),
+            FOREIGN KEY (reconstruction_id) REFERENCES reconstructions (reconstruction_id) ON DELETE CASCADE,
+            FOREIGN KEY (measurement_id) REFERENCES measurements (id) ON DELETE CASCADE
+        );
+        """
+    )
+
+    # 7. Reconstruction Results table (persisted 2D Convergence & 3D Origin solutions)
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reconstruction_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            reconstruction_id TEXT NOT NULL,
+            stain_count INTEGER NOT NULL,
+            surface_type TEXT NOT NULL,
+            convergence_x_mm REAL NOT NULL,
+            convergence_y_mm REAL NOT NULL,
+            rms_residual_mm REAL NOT NULL,
+            max_residual_mm REAL NOT NULL,
+            convergence_radius_mm REAL NOT NULL,
+            condition_number REAL,
+            tangent_origin_x_mm REAL NOT NULL,
+            tangent_origin_y_mm REAL NOT NULL,
+            tangent_origin_z_mm REAL NOT NULL,
+            tangent_z_std_mm REAL NOT NULL,
+            tangent_z_uncertainty_mm REAL NOT NULL,
+            tangent_z_min_mm REAL NOT NULL,
+            tangent_z_max_mm REAL NOT NULL,
+            estimated_origin_x_mm REAL NOT NULL,
+            estimated_origin_y_mm REAL NOT NULL,
+            estimated_origin_z_mm REAL NOT NULL,
+            rms_3d_miss_mm REAL NOT NULL,
+            result_json TEXT,
+            calculation_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (reconstruction_id) REFERENCES reconstructions (reconstruction_id) ON DELETE CASCADE
+        );
+        """
+    )
+
+    # 8. Forensic PDF Reports table (Phase 4.4 — Report Integrity, Revisions & SHA-256 Traceability)
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_id TEXT UNIQUE NOT NULL,
+            case_id TEXT,
+            reconstruction_id TEXT,
+            measurement_id INTEGER,
+            report_type TEXT NOT NULL,
+            report_title TEXT NOT NULL,
+            examiner_name TEXT,
+            laboratory_name TEXT,
+            examiner_observations TEXT,
+            report_status TEXT NOT NULL DEFAULT 'DRAFT',
+            revision_number INTEGER NOT NULL DEFAULT 1,
+            source_measurement_ids TEXT,
+            source_image_ids TEXT,
+            image_hashes_json TEXT,
+            filename TEXT NOT NULL,
+            filepath TEXT NOT NULL,
+            file_size INTEGER NOT NULL DEFAULT 0,
+            sha256_hash TEXT NOT NULL,
+            generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (case_id) REFERENCES cases (case_id) ON DELETE SET NULL,
+            FOREIGN KEY (reconstruction_id) REFERENCES reconstructions (reconstruction_id) ON DELETE SET NULL,
+            FOREIGN KEY (measurement_id) REFERENCES measurements (id) ON DELETE SET NULL
+        );
+        """
+    )
+
     # Indexes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_cases_case_id ON cases(case_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_cases_status ON cases(status);")
@@ -149,6 +254,11 @@ def init_db(seed_demo: bool = False) -> None:
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_measurements_case_id ON measurements(case_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_images_image_id ON evidence_images(image_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_images_case_id ON evidence_images(case_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_rec_case_id ON reconstructions(case_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_rec_stains_rec_id ON reconstruction_stains(reconstruction_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_rec_results_rec_id ON reconstruction_results(reconstruction_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_reports_report_id ON reports(report_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_reports_case_id ON reports(case_id);")
 
     conn.commit()
     conn.close()
@@ -158,9 +268,13 @@ def init_db(seed_demo: bool = False) -> None:
 
 
 def clear_all_data() -> None:
-    """Clear all records from measurements, evidence_images, evidence, and cases tables."""
+    """Clear all records from reports, reconstruction tables, measurements, evidence_images, evidence, and cases."""
     conn = get_db_connection()
     try:
+        conn.execute("DELETE FROM reports;")
+        conn.execute("DELETE FROM reconstruction_results;")
+        conn.execute("DELETE FROM reconstruction_stains;")
+        conn.execute("DELETE FROM reconstructions;")
         conn.execute("DELETE FROM measurements;")
         conn.execute("DELETE FROM evidence_images;")
         conn.execute("DELETE FROM evidence;")
@@ -832,3 +946,583 @@ def update_image_calibration(image_id: str, scale_factor: float, is_calibrated: 
     conn.commit()
     conn.close()
     return updated
+
+
+# ---------------------------------------------------------------------------
+# Phase 4.3: Trajectory Reconstruction Queries & Mutations
+# ---------------------------------------------------------------------------
+
+
+def generate_reconstruction_id() -> str:
+    """Generate a unique trajectory reconstruction ID in the format REC-YYYY-NNNN."""
+    conn = get_db_connection()
+    current_year = datetime.now().year
+    prefix = f"REC-{current_year}-"
+
+    while True:
+        num = random.randint(1000, 9999)
+        candidate = f"{prefix}{num}"
+        cursor = conn.execute("SELECT 1 FROM reconstructions WHERE reconstruction_id = ?;", (candidate,))
+        if not cursor.fetchone():
+            conn.close()
+            return candidate
+
+
+def get_measurement_by_id(measurement_id: int) -> Optional[Dict[str, Any]]:
+    """Retrieve a single measurement record by its integer primary key id."""
+    conn = get_db_connection()
+    cursor = conn.execute(
+        """
+        SELECT m.*, ei.is_calibrated AS image_is_calibrated, ei.scale_factor AS image_scale_factor,
+               ei.original_filename AS image_filename
+        FROM measurements m
+        LEFT JOIN evidence_images ei ON m.image_id = ei.image_id
+        WHERE m.id = ?;
+        """,
+        (int(measurement_id),),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_measurements_for_case(case_id: str) -> List[Dict[str, Any]]:
+    """Retrieve all measurements associated with a specific case, joined with image calibration metadata."""
+    conn = get_db_connection()
+    cursor = conn.execute(
+        """
+        SELECT m.*, ei.is_calibrated AS image_is_calibrated, ei.scale_factor AS image_scale_factor,
+               ei.original_filename AS image_filename
+        FROM measurements m
+        LEFT JOIN evidence_images ei ON m.image_id = ei.image_id
+        WHERE m.case_id = ?
+        ORDER BY m.created_at DESC, m.id DESC;
+        """,
+        (case_id.strip(),),
+    )
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def create_reconstruction(
+    case_id: str,
+    reconstruction_name: str = "Primary Scene Reconstruction",
+    surface_type: str = "Horizontal Floor",
+    incline_deg: Optional[float] = None,
+    notes: str = "",
+    reconstruction_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Create a new trajectory reconstruction workspace linked to a forensic case."""
+    rec_id = reconstruction_id.strip() if reconstruction_id else generate_reconstruction_id()
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO reconstructions (
+                reconstruction_id, case_id, reconstruction_name, surface_type, incline_deg, status, notes
+            ) VALUES (?, ?, ?, ?, ?, 'Draft', ?);
+            """,
+            (
+                rec_id,
+                case_id.strip(),
+                reconstruction_name.strip(),
+                surface_type.strip() if surface_type else "Horizontal Floor",
+                incline_deg,
+                notes.strip() if notes else "",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return get_reconstruction_by_id(rec_id)
+
+
+def get_reconstruction_by_id(reconstruction_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve a reconstruction record by its unique reconstruction_id."""
+    conn = get_db_connection()
+    cursor = conn.execute(
+        "SELECT * FROM reconstructions WHERE reconstruction_id = ?;",
+        (reconstruction_id.strip(),),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_reconstructions_for_case(case_id: str) -> List[Dict[str, Any]]:
+    """Retrieve all trajectory reconstructions for a given case_id."""
+    conn = get_db_connection()
+    cursor = conn.execute(
+        "SELECT * FROM reconstructions WHERE case_id = ? ORDER BY updated_at DESC, id DESC;",
+        (case_id.strip(),),
+    )
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def update_reconstruction_metadata(
+    reconstruction_id: str,
+    surface_type: Optional[str] = None,
+    incline_deg: Optional[float] = None,
+    status: Optional[str] = None,
+    reconstruction_name: Optional[str] = None,
+) -> bool:
+    """Update receiving surface configuration or status on a reconstruction workspace."""
+    rec = get_reconstruction_by_id(reconstruction_id)
+    if not rec:
+        return False
+    new_surf = surface_type.strip() if surface_type else rec["surface_type"]
+    new_inc = incline_deg if incline_deg is not None else rec["incline_deg"]
+    new_stat = status.strip() if status else rec["status"]
+    new_name = reconstruction_name.strip() if reconstruction_name else rec["reconstruction_name"]
+
+    conn = get_db_connection()
+    cursor = conn.execute(
+        """
+        UPDATE reconstructions
+        SET surface_type = ?, incline_deg = ?, status = ?, reconstruction_name = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE reconstruction_id = ?;
+        """,
+        (new_surf, new_inc, new_stat, new_name, reconstruction_id.strip()),
+    )
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
+def add_stain_to_reconstruction(
+    reconstruction_id: str,
+    measurement_id: int,
+    stain_identifier: Optional[str] = None,
+    surface_x_mm: Optional[float] = None,
+    surface_y_mm: Optional[float] = None,
+    direction_angle: Optional[float] = None,
+    surface_type: Optional[str] = None,
+    direction_source: str = "Examiner Supplied (Tail/Spine Morphology)",
+    sigma_gamma_deg: float = 2.0,
+    examiner_notes: str = "",
+) -> Dict[str, Any]:
+    """
+    Associate an existing measurement with a reconstruction workspace.
+    Raises sqlite3.IntegrityError if the measurement is already added to this reconstruction.
+    """
+    meas = get_measurement_by_id(measurement_id)
+    if not meas:
+        raise ValueError(f"Measurement ID {measurement_id} does not exist.")
+
+    eff_label = (stain_identifier or meas.get("stain_label") or f"Stain-{measurement_id}").strip()
+    eff_x = surface_x_mm if surface_x_mm is not None else meas.get("surface_x_mm")
+    eff_y = surface_y_mm if surface_y_mm is not None else meas.get("surface_y_mm")
+    eff_dir = direction_angle if direction_angle is not None else meas.get("direction_angle")
+    eff_surf = (surface_type or meas.get("surface_type") or "Horizontal Floor").strip()
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO reconstruction_stains (
+                reconstruction_id, measurement_id, stain_identifier,
+                surface_x_mm, surface_y_mm, direction_angle, surface_type,
+                direction_source, sigma_gamma_deg, examiner_notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            (
+                reconstruction_id.strip(),
+                int(measurement_id),
+                eff_label,
+                eff_x,
+                eff_y,
+                eff_dir,
+                eff_surf,
+                direction_source.strip() if direction_source else "Examiner Supplied",
+                sigma_gamma_deg,
+                examiner_notes.strip() if examiner_notes else "",
+            ),
+        )
+        row_id = cursor.lastrowid
+        conn.execute(
+            "UPDATE reconstructions SET updated_at = CURRENT_TIMESTAMP WHERE reconstruction_id = ?;",
+            (reconstruction_id.strip(),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    stains = get_stains_for_reconstruction(reconstruction_id)
+    for st in stains:
+        if st["id"] == row_id:
+            return st
+    return stains[-1]
+
+
+def remove_stain_from_reconstruction(reconstruction_id: str, measurement_id: int) -> bool:
+    """Remove a measurement association from a reconstruction workspace."""
+    conn = get_db_connection()
+    cursor = conn.execute(
+        "DELETE FROM reconstruction_stains WHERE reconstruction_id = ? AND measurement_id = ?;",
+        (reconstruction_id.strip(), int(measurement_id)),
+    )
+    deleted = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+def update_reconstruction_stain(
+    reconstruction_id: str,
+    measurement_id: int,
+    stain_identifier: Optional[str] = None,
+    surface_x_mm: Optional[float] = None,
+    surface_y_mm: Optional[float] = None,
+    direction_angle: Optional[float] = None,
+    surface_type: Optional[str] = None,
+    direction_source: Optional[str] = None,
+    sigma_gamma_deg: Optional[float] = None,
+    examiner_notes: Optional[str] = None,
+) -> bool:
+    """Update directional, coordinate, or surface parameters for a stain in a reconstruction."""
+    conn = get_db_connection()
+    cursor = conn.execute(
+        "SELECT * FROM reconstruction_stains WHERE reconstruction_id = ? AND measurement_id = ?;",
+        (reconstruction_id.strip(), int(measurement_id)),
+    )
+    existing = cursor.fetchone()
+    if not existing:
+        conn.close()
+        return False
+
+    new_ident = stain_identifier.strip() if stain_identifier else existing["stain_identifier"]
+    new_x = surface_x_mm if surface_x_mm is not None else existing["surface_x_mm"]
+    new_y = surface_y_mm if surface_y_mm is not None else existing["surface_y_mm"]
+    new_dir = direction_angle if direction_angle is not None else existing["direction_angle"]
+    new_surf = surface_type.strip() if surface_type else existing["surface_type"]
+    new_src = direction_source.strip() if direction_source else existing["direction_source"]
+    new_sig = sigma_gamma_deg if sigma_gamma_deg is not None else existing["sigma_gamma_deg"]
+    new_notes = examiner_notes.strip() if examiner_notes is not None else existing["examiner_notes"]
+
+    cursor.execute(
+        """
+        UPDATE reconstruction_stains
+        SET stain_identifier = ?, surface_x_mm = ?, surface_y_mm = ?,
+            direction_angle = ?, surface_type = ?, direction_source = ?,
+            sigma_gamma_deg = ?, examiner_notes = ?
+        WHERE reconstruction_id = ? AND measurement_id = ?;
+        """,
+        (
+            new_ident,
+            new_x,
+            new_y,
+            new_dir,
+            new_surf,
+            new_src,
+            new_sig,
+            new_notes,
+            reconstruction_id.strip(),
+            int(measurement_id),
+        ),
+    )
+    # Also synchronize back to measurements row for consistency
+    cursor.execute(
+        """
+        UPDATE measurements
+        SET surface_x_mm = ?, surface_y_mm = ?, direction_angle = ?, surface_type = ?
+        WHERE id = ?;
+        """,
+        (new_x, new_y, new_dir, new_surf, int(measurement_id)),
+    )
+    conn.commit()
+    conn.close()
+    return True
+
+
+def get_stains_for_reconstruction(reconstruction_id: str) -> List[Dict[str, Any]]:
+    """Retrieve all stains in a reconstruction joined with measurement and optical calibration metadata."""
+    conn = get_db_connection()
+    cursor = conn.execute(
+        """
+        SELECT rs.*,
+               m.case_id, m.evidence_id, m.stain_label, m.width, m.length, m.ratio,
+               m.angle_degrees, m.angle_radians, m.is_perpendicular, m.interpretation,
+               m.calibration_status, m.image_id, m.width_px, m.length_px,
+               m.scale_factor AS measurement_scale_factor,
+               ei.is_calibrated AS image_is_calibrated,
+               ei.scale_factor AS image_scale_factor,
+               ei.original_filename AS image_filename
+        FROM reconstruction_stains rs
+        JOIN measurements m ON rs.measurement_id = m.id
+        LEFT JOIN evidence_images ei ON m.image_id = ei.image_id
+        WHERE rs.reconstruction_id = ?
+        ORDER BY rs.id ASC;
+        """,
+        (reconstruction_id.strip(),),
+    )
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def save_reconstruction_result(
+    reconstruction_id: str,
+    stain_count: int,
+    surface_type: str,
+    convergence_x_mm: float,
+    convergence_y_mm: float,
+    rms_residual_mm: float,
+    max_residual_mm: float,
+    convergence_radius_mm: float,
+    condition_number: float,
+    tangent_origin_x_mm: float,
+    tangent_origin_y_mm: float,
+    tangent_origin_z_mm: float,
+    tangent_z_std_mm: float,
+    tangent_z_uncertainty_mm: float,
+    tangent_z_min_mm: float,
+    tangent_z_max_mm: float,
+    estimated_origin_x_mm: float,
+    estimated_origin_y_mm: float,
+    estimated_origin_z_mm: float,
+    rms_3d_miss_mm: float,
+    result_json: str,
+) -> Dict[str, Any]:
+    """Persist a verified 2D convergence and 3D origin reconstruction result."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO reconstruction_results (
+                reconstruction_id, stain_count, surface_type,
+                convergence_x_mm, convergence_y_mm, rms_residual_mm, max_residual_mm,
+                convergence_radius_mm, condition_number,
+                tangent_origin_x_mm, tangent_origin_y_mm, tangent_origin_z_mm,
+                tangent_z_std_mm, tangent_z_uncertainty_mm, tangent_z_min_mm, tangent_z_max_mm,
+                estimated_origin_x_mm, estimated_origin_y_mm, estimated_origin_z_mm,
+                rms_3d_miss_mm, result_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            (
+                reconstruction_id.strip(),
+                stain_count,
+                surface_type.strip(),
+                convergence_x_mm,
+                convergence_y_mm,
+                rms_residual_mm,
+                max_residual_mm,
+                convergence_radius_mm,
+                condition_number,
+                tangent_origin_x_mm,
+                tangent_origin_y_mm,
+                tangent_origin_z_mm,
+                tangent_z_std_mm,
+                tangent_z_uncertainty_mm,
+                tangent_z_min_mm,
+                tangent_z_max_mm,
+                estimated_origin_x_mm,
+                estimated_origin_y_mm,
+                estimated_origin_z_mm,
+                rms_3d_miss_mm,
+                result_json,
+            ),
+        )
+        conn.execute(
+            "UPDATE reconstructions SET status = 'Calculated', updated_at = CURRENT_TIMESTAMP WHERE reconstruction_id = ?;",
+            (reconstruction_id.strip(),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return get_latest_reconstruction_result(reconstruction_id)
+
+
+def get_latest_reconstruction_result(reconstruction_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve the most recent calculated result for a reconstruction workspace."""
+    conn = get_db_connection()
+    cursor = conn.execute(
+        """
+        SELECT * FROM reconstruction_results
+        WHERE reconstruction_id = ?
+        ORDER BY calculation_timestamp DESC, id DESC
+        LIMIT 1;
+        """,
+        (reconstruction_id.strip(),),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+# ===========================================================================
+# Phase 4.4: Forensic PDF Report Registry, Revisions & Traceability
+# ===========================================================================
+
+
+def get_next_report_revision(
+    report_type: str,
+    case_id: Optional[str] = None,
+    reconstruction_id: Optional[str] = None,
+    measurement_id: Optional[int] = None,
+) -> int:
+    """
+    Determine the next sequential revision number (1, 2, 3...) for a given report scope.
+    Ensures regenerated reports increment revision numbers and never overwrite prior reports.
+    """
+    conn = get_db_connection()
+    query = "SELECT MAX(revision_number) FROM reports WHERE report_type = ?"
+    params: List[Any] = [report_type.strip()]
+
+    if case_id:
+        query += " AND case_id = ?"
+        params.append(case_id.strip())
+    else:
+        query += " AND case_id IS NULL"
+
+    if reconstruction_id:
+        query += " AND reconstruction_id = ?"
+        params.append(reconstruction_id.strip())
+    else:
+        query += " AND reconstruction_id IS NULL"
+
+    if measurement_id is not None:
+        query += " AND measurement_id = ?"
+        params.append(int(measurement_id))
+    else:
+        query += " AND measurement_id IS NULL"
+
+    cursor = conn.execute(query + ";", params)
+    row = cursor.fetchone()
+    conn.close()
+    max_rev = row[0] if row and row[0] is not None else 0
+    return int(max_rev) + 1
+
+
+def generate_report_id(revision_number: int = 1) -> str:
+    """Generate a unique forensic report ID in the format RPT-YYYY-NNNN-R<rev>."""
+    conn = get_db_connection()
+    current_year = datetime.now().year
+    while True:
+        num = random.randint(1000, 9999)
+        candidate = f"RPT-{current_year}-{num}-R{int(revision_number)}"
+        cursor = conn.execute("SELECT 1 FROM reports WHERE report_id = ?;", (candidate,))
+        if not cursor.fetchone():
+            conn.close()
+            return candidate
+
+
+def create_report_record(
+    report_id: str,
+    report_type: str,
+    report_title: str,
+    filename: str,
+    filepath: str,
+    file_size: int,
+    sha256_hash: str,
+    report_status: str = "DRAFT",
+    revision_number: int = 1,
+    case_id: Optional[str] = None,
+    reconstruction_id: Optional[str] = None,
+    measurement_id: Optional[int] = None,
+    examiner_name: Optional[str] = None,
+    laboratory_name: Optional[str] = None,
+    examiner_observations: Optional[str] = None,
+    source_measurement_ids: Optional[str] = None,
+    source_image_ids: Optional[str] = None,
+    image_hashes_json: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Insert a generated forensic PDF report record into SQLite and return the saved row."""
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO reports (
+                report_id, case_id, reconstruction_id, measurement_id,
+                report_type, report_title, examiner_name, laboratory_name,
+                examiner_observations, report_status, revision_number,
+                source_measurement_ids, source_image_ids, image_hashes_json,
+                filename, filepath, file_size, sha256_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            (
+                report_id.strip(),
+                case_id.strip() if case_id else None,
+                reconstruction_id.strip() if reconstruction_id else None,
+                int(measurement_id) if measurement_id is not None else None,
+                report_type.strip(),
+                report_title.strip(),
+                examiner_name.strip() if examiner_name else None,
+                laboratory_name.strip() if laboratory_name else None,
+                examiner_observations.strip() if examiner_observations else None,
+                report_status.strip().upper(),
+                int(revision_number),
+                source_measurement_ids,
+                source_image_ids,
+                image_hashes_json,
+                filename.strip(),
+                filepath.strip(),
+                int(file_size),
+                sha256_hash.strip().lower(),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return get_report_by_id(report_id)
+
+
+def get_report_by_id(report_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve a single forensic report record by its unique report_id."""
+    if not report_id or not str(report_id).strip():
+        return None
+    conn = get_db_connection()
+    cursor = conn.execute(
+        """
+        SELECT r.*, c.title AS case_title, c.reference_no AS case_reference_no
+        FROM reports r
+        LEFT JOIN cases c ON r.case_id = c.case_id
+        WHERE r.report_id = ?;
+        """,
+        (str(report_id).strip(),),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_all_reports(
+    case_id: Optional[str] = None,
+    report_type: Optional[str] = None,
+    report_status: Optional[str] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """Retrieve generated forensic PDF reports ordered newest first with optional filters."""
+    conn = get_db_connection()
+    query = """
+        SELECT r.*, c.title AS case_title, c.reference_no AS case_reference_no
+        FROM reports r
+        LEFT JOIN cases c ON r.case_id = c.case_id
+        WHERE 1=1
+    """
+    params: List[Any] = []
+
+    if case_id and case_id != "All":
+        query += " AND r.case_id = ?"
+        params.append(case_id.strip())
+    if report_type and report_type != "All":
+        query += " AND r.report_type = ?"
+        params.append(report_type.strip())
+    if report_status and report_status != "All":
+        query += " AND r.report_status = ?"
+        params.append(report_status.strip().upper())
+
+    query += " ORDER BY r.generated_at DESC, r.id DESC LIMIT ?;"
+    params.append(int(limit))
+
+    cursor = conn.execute(query, params)
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
+

@@ -372,6 +372,7 @@ def generate_ellipse_overlay(
     ellipse_data: Dict[str, Any],
     calibration_data: Optional[Dict[str, Any]] = None,
     stain_label: str = "Stain-01",
+    direction_angle_deg: Optional[float] = None,
 ) -> np.ndarray:
     """
     Render a forensic visualization overlay featuring:
@@ -435,6 +436,21 @@ def generate_ellipse_overlay(
             thickness=2,
         )
 
+        # Examiner-supplied direction of travel vector (gamma in [0, 360) deg, +Y up -> -dy in image)
+        if direction_angle_deg is not None:
+            gamma_rad = math.radians(float(direction_angle_deg))
+            arrow_r = max(axis_w, axis_h) * 0.72
+            end_x = int(round(cx + arrow_r * math.cos(gamma_rad)))
+            end_y = int(round(cy - arrow_r * math.sin(gamma_rad)))
+            cv2.arrowedLine(
+                vis,
+                (int(round(cx)), int(round(cy))),
+                (end_x, end_y),
+                (255, 100, 255),
+                2,
+                tipLength=0.22,
+            )
+
     # 4. Draw calibration reference if provided
     if calibration_data and calibration_data.get("is_calibrated"):
         p1 = tuple(map(int, map(round, calibration_data["point1"])))
@@ -458,6 +474,9 @@ def generate_ellipse_overlay(
         hud_lines.append(f"Calibrated L: {mm_l:.2f} mm")
     else:
         hud_lines.append("Optical Calibration: UNCALIBRATED (px mode)")
+
+    if direction_angle_deg is not None:
+        hud_lines.append(f"Supplied Travel Dir: {float(direction_angle_deg):.1f} deg")
 
     # Draw semi-transparent background for HUD
     box_w, box_h = 240, 20 + len(hud_lines) * 18
@@ -505,6 +524,7 @@ def process_bloodstain_pipeline(
     scale_bar_points: Optional[Tuple[Tuple[float, float], Tuple[float, float]]] = None,
     known_length_mm: Optional[float] = None,
     stain_label: str = "Stain-01",
+    direction_angle_deg: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Execute the comprehensive forensic computer vision pipeline:
@@ -581,6 +601,7 @@ def process_bloodstain_pipeline(
         ellipse_data=ellipse_data,
         calibration_data=calibration_data,
         stain_label=stain_label,
+        direction_angle_deg=direction_angle_deg,
     )
 
     return {

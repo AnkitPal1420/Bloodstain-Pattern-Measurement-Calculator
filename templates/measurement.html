@@ -552,13 +552,50 @@
                     <p class="form-hint">Longest dimension along travel direction (W &le; L).</p>
                 </div>
 
-                <div style="display: flex; gap: 10px; margin-top: 14px;">
+                <!-- Phase 4.3: Examiner-Supplied Directionality & Receiving Surface Position -->
+                <div style="margin-top: 14px; padding: 12px; background-color: var(--bg-surface); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+                    <div style="font-size: 11.5px; font-weight: 700; text-transform: uppercase; color: var(--text-primary); margin-bottom: 8px;">
+                        🧭 Trajectory Reconstruction Metadata (Optional — Examiner Supplied)
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px;">
+                        <div>
+                            <label for="direction_angle" style="font-size: 11px; color: var(--text-muted);">Travel Dir &gamma; (0–360°):</label>
+                            <input type="number" step="any" min="0" max="359.999" name="direction_angle" id="direction_angle" value="{{ direction_angle if direction_angle is not none else '' }}" placeholder="e.g. 45.0" class="form-control" style="padding: 6px 8px; font-size: 12px;">
+                        </div>
+                        <div>
+                            <label for="surface_x_mm" style="font-size: 11px; color: var(--text-muted);">Surface X_s (mm):</label>
+                            <input type="number" step="any" name="surface_x_mm" id="surface_x_mm" value="{{ surface_x_mm if surface_x_mm is not none else '' }}" placeholder="X_s (mm)" class="form-control" style="padding: 6px 8px; font-size: 12px;">
+                        </div>
+                        <div>
+                            <label for="surface_y_mm" style="font-size: 11px; color: var(--text-muted);">Surface Y_s (mm):</label>
+                            <input type="number" step="any" name="surface_y_mm" id="surface_y_mm" value="{{ surface_y_mm if surface_y_mm is not none else '' }}" placeholder="Y_s (mm)" class="form-control" style="padding: 6px 8px; font-size: 12px;">
+                        </div>
+                        <div>
+                            <label for="surface_type" style="font-size: 11px; color: var(--text-muted);">Receiving Surface:</label>
+                            <select name="surface_type" id="surface_type" class="form-control" style="padding: 6px 8px; font-size: 12px;">
+                                <option value="Horizontal Floor" {% if surface_type == 'Horizontal Floor' %}selected{% endif %}>Horizontal Floor</option>
+                                <option value="Vertical Wall" {% if surface_type == 'Vertical Wall' %}selected{% endif %}>Vertical Wall</option>
+                                <option value="Inclined Surface (45°)" {% if surface_type == 'Inclined Surface (45°)' %}selected{% endif %}>Inclined Surface (45°)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <p class="form-hint" style="margin-top: 6px;">
+                        Direction of travel (&gamma;) is never inferred from an ellipse alone; supply &gamma; from physical tail/spine orientation.
+                    </p>
+                </div>
+
+                <div style="display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap;">
                     <button type="submit" name="form_action" value="calculate" class="btn btn-primary" style="flex: 1;">
                         📐 Compute Impact Angle
                     </button>
                     <button type="submit" name="save_record" value="true" class="btn btn-secondary">
                         💾 Compute &amp; Save
                     </button>
+                    {% if selected_case %}
+                        <a href="{{ url_for('reconstruction_workspace', case_id=selected_case) }}" class="btn btn-secondary" style="border-color: rgba(56,189,248,0.4); color: #38bdf8;">
+                            🧭 Case Reconstruction
+                        </a>
+                    {% endif %}
                 </div>
             </form>
 

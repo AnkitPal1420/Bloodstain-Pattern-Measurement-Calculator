@@ -1,0 +1,474 @@
+{% extends "base.html" %}
+
+{% block title %}Reconstruction Workspace — {{ case.case_id }}{% endblock %}
+{% block breadcrumb %}Case Registry / {{ case.case_id }} / Trajectory Reconstruction Workspace{% endblock %}
+
+{% block content %}
+<!-- A. Case & Reconstruction Information Header -->
+<div class="card" style="margin-bottom: 20px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px;">
+        <div>
+            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 6px;">
+                <span class="case-id-badge">{{ case.case_id }}</span>
+                <span class="case-id-badge" style="color: #38bdf8;">{{ workspace.reconstruction.reconstruction_id }}</span>
+                {% if workspace.reconstruction.status == 'Calculated' %}
+                    <span class="status-pill status-active">● Reconstruction Calculated</span>
+                {% elif workspace.reconstruction.status == 'Invalid' %}
+                    <span class="status-pill status-pending">● Validation / Geometry Issue</span>
+                {% else %}
+                    <span class="status-pill status-review">● Draft Workspace</span>
+                {% endif %}
+            </div>
+            <h1 class="card-title" style="font-size: 19px;">
+                <span>🧭</span> Automated Multi-Stain Trajectory Reconstruction — {{ case.title }}
+            </h1>
+            <p style="color: var(--text-muted); font-size: 13px; margin-top: 4px;">
+                Integrate calibrated bloodstain measurements, verify examiner-supplied direction of travel (&gamma;), and compute 2D Area of Convergence &amp; 3D Area of Origin.
+            </p>
+        </div>
+
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <a href="{{ url_for('measurement_workspace', case_id=case.case_id) }}" class="btn btn-secondary btn-sm">
+                <span>📐</span> + Measure New Stain
+            </a>
+            <a href="{{ url_for('trajectory_laboratory', reconstruction_id=workspace.reconstruction.reconstruction_id, case_id=case.case_id) }}" class="btn btn-primary btn-sm">
+                <span>🌐</span> Open Interactive 3D Viewport
+            </a>
+            <form method="POST" action="{{ url_for('generate_reconstruction_report_route', reconstruction_id=workspace.reconstruction.reconstruction_id) }}" style="display: inline;">
+                <input type="hidden" name="report_status" value="DRAFT">
+                <button type="submit" class="btn btn-secondary btn-sm" style="border-color: rgba(16,185,129,0.4); color: var(--status-active);">
+                    <span>📄</span> Export Reconstruction PDF
+                </button>
+            </form>
+            <a href="{{ url_for('case_detail', case_id=case.case_id) }}" class="btn btn-secondary btn-sm">
+                <span>📁</span> Back to Case
+            </a>
+        </div>
+    </div>
+</div>
+
+<!-- Scientific Distinction & Direction Convention Reference Banner -->
+<div class="alert alert-info" style="margin-bottom: 20px; align-items: flex-start;">
+    <span style="font-size: 18px;">ℹ️</span>
+    <div style="font-size: 12.5px;">
+        <strong>Forensic Coordinate &amp; Directionality Convention:</strong>
+        <ul style="margin: 4px 0 0 18px;">
+            <li><strong>Calibration Requirement:</strong> Only measurements calibrated in physical millimeters (<code>mm/px</code>) are eligible. Uncalibrated pixel dimensions are strictly blocked from spatial reconstruction.</li>
+            <li><strong>Direction of Travel (&gamma; &in; [0°, 360°)):</strong> Must be supplied by the examiner from physical satellite tail/spine elongation (measured counter-clockwise from <code>+X_surface</code>). Reverse source bearing is derived as <code>&beta; = (&gamma; + 180°) mod 360°</code>.</li>
+            <li><strong>Linear Stringing Limitation:</strong> Calculated intersections neglect gravity and aerodynamic drag and represent an <em>approximate 2D Area of Convergence and 3D Area of Origin</em>, never an exact point source.</li>
+        </ul>
+    </div>
+</div>
+
+{% if calc_error %}
+    <div class="alert alert-danger" role="alert">
+        <strong>❌ Reconstruction Validation / Geometry Error:</strong> {{ calc_error }}
+    </div>
+{% endif %}
+
+<!-- Available Case Measurements Pool -->
+<div class="card" style="margin-bottom: 20px;">
+    <div class="card-header" style="margin-bottom: 12px; padding-bottom: 10px;">
+        <h2 class="card-title" style="font-size: 15px;">
+            <span>📋</span> Case Measurement Registry Pool ({{ workspace.available_measurements|length }} Record(s))
+        </h2>
+        <span style="font-size: 12px; color: var(--text-muted);">
+            Select calibrated stain measurements from Case <code>{{ case.case_id }}</code> to include in this reconstruction.
+        </span>
+    </div>
+
+    {% if workspace.available_measurements %}
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Meas #</th>
+                        <th>Stain Label</th>
+                        <th>Image ID</th>
+                        <th>Dimensions (W &times; L)</th>
+                        <th>Impact Angle (&alpha;)</th>
+                        <th>Calibration Status</th>
+                        <th>Saved Pos (X_s, Y_s)</th>
+                        <th>Saved Dir (&gamma;)</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for m in workspace.available_measurements %}
+                        <tr>
+                            <td><code>#{{ m.id }}</code></td>
+                            <td><strong style="color: var(--text-primary); font-family: var(--font-mono);">{{ m.stain_label }}</strong></td>
+                            <td>
+                                {% if m.image_id %}
+                                    <span class="case-id-badge" style="font-size: 11px;">{{ m.image_id }}</span>
+                                {% else %}
+                                    <span style="color: var(--text-muted); font-size: 11px;">Manual</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ "%.2f"|format(m.width) }} &times; {{ "%.2f"|format(m.length) }}</td>
+                            <td><strong style="color: var(--crimson);">{{ "%.2f"|format(m.angle_degrees) }}°</strong></td>
+                            <td>
+                                {% if m.validation.is_calibrated %}
+                                    <span class="status-pill status-active">✓ Calibrated</span>
+                                {% else %}
+                                    <span class="status-pill status-pending">✖ Uncalibrated</span>
+                                {% endif %}
+                            </td>
+                            <td style="font-family: var(--font-mono); font-size: 12px;">
+                                {% if m.surface_x_mm is not none and m.surface_y_mm is not none %}
+                                    ({{ "%.1f"|format(m.surface_x_mm) }}, {{ "%.1f"|format(m.surface_y_mm) }}) mm
+                                {% else %}
+                                    <span style="color: var(--text-muted);">Not set</span>
+                                {% endif %}
+                            </td>
+                            <td style="font-family: var(--font-mono); font-size: 12px;">
+                                {% if m.direction_angle is not none %}
+                                    {{ "%.1f"|format(m.direction_angle) }}°
+                                {% else %}
+                                    <span style="color: var(--text-muted);">Not set</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if m.already_added %}
+                                    <span class="status-pill status-completed">✓ In Workspace</span>
+                                {% else %}
+                                    <form method="POST" action="{{ url_for('reconstruction_add_measurement', case_id=case.case_id) }}" style="display: inline;">
+                                        <input type="hidden" name="measurement_id" value="{{ m.id }}">
+                                        <input type="hidden" name="stain_identifier" value="{{ m.stain_label }}">
+                                        <button type="submit" class="btn btn-primary btn-sm">+ Add Stain</button>
+                                    </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div style="text-align: center; padding: 20px; color: var(--text-muted);">
+            No measurements recorded for Case <code>{{ case.case_id }}</code> yet.
+            <a href="{{ url_for('measurement_workspace', case_id=case.case_id) }}" class="btn btn-primary btn-sm" style="margin-left: 10px;">
+                Create Calibrated Measurement
+            </a>
+        </div>
+    {% endif %}
+</div>
+
+<!-- B & C. Selected Stain Measurement Table with Calibration & Directionality Validation Indicators -->
+<div class="card" style="margin-bottom: 20px;">
+    <div class="card-header" style="margin-bottom: 12px; padding-bottom: 10px;">
+        <h2 class="card-title" style="font-size: 15px;">
+            <span>🔬</span> Selected Reconstruction Stains ({{ workspace.selected_stains|length }} Selected)
+        </h2>
+        {% if workspace.can_calculate %}
+            <span class="status-pill status-active">✓ All Selected Stains Validated for Reconstruction</span>
+        {% else %}
+            <span class="status-pill status-review">⚠️ Requires &ge; 2 Validated Calibrated Stains</span>
+        {% endif %}
+    </div>
+
+    {% if workspace.ineligible_reasons %}
+        <div class="alert alert-warning" style="margin-bottom: 14px; display: block;">
+            <strong>⚠️ Incomplete or Ineligible Stain Measurements Detected (Will Not Be Silently Discarded):</strong>
+            <ul style="margin: 6px 0 0 18px; font-size: 12.5px;">
+                {% for reason in workspace.ineligible_reasons %}
+                    <li>{{ reason }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+    {% endif %}
+
+    {% if workspace.selected_stains %}
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Stain ID</th>
+                        <th>Measured Axes &amp; Angle (&alpha;)</th>
+                        <th>Calibration Validation</th>
+                        <th>Surface X_s (mm)</th>
+                        <th>Surface Y_s (mm)</th>
+                        <th>Supplied Travel Dir &gamma; (0–360°)</th>
+                        <th>Direction Verification Source</th>
+                        <th>Validation Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for s in workspace.selected_stains %}
+                        <tr>
+                            <form method="POST" action="{{ url_for('reconstruction_update_stain', case_id=case.case_id) }}">
+                                <input type="hidden" name="measurement_id" value="{{ s.measurement_id }}">
+                                <td>
+                                    <input type="text" name="stain_identifier" value="{{ s.stain_identifier }}" class="form-control" style="padding: 5px 7px; font-size: 12px; font-family: var(--font-mono); width: 95px;" required>
+                                    <div style="font-size: 10.5px; color: var(--text-muted); margin-top: 2px;">
+                                        Meas #{{ s.measurement_id }} {% if s.image_id %}({{ s.image_id }}){% endif %}
+                                    </div>
+                                </td>
+                                <td>
+                                    <div style="font-family: var(--font-mono); font-size: 12px; color: var(--text-primary);">
+                                        W={{ "%.2f"|format(s.width) }}, L={{ "%.2f"|format(s.length) }}
+                                    </div>
+                                    <div style="font-size: 12px; font-weight: 700; color: var(--crimson);">
+                                        &alpha; = {{ "%.2f"|format(s.angle_degrees) }}°
+                                        {% if s.validation.sigma_angle_degrees is not none %}
+                                            <span style="font-weight: 400; color: var(--text-muted); font-size: 11px;">(&pm;{{ "%.2f"|format(s.validation.sigma_angle_degrees) }}°)</span>
+                                        {% endif %}
+                                    </div>
+                                </td>
+                                <td>
+                                    {% if s.validation.is_calibrated %}
+                                        <span class="status-pill status-active">✓ Calibrated (mm)</span>
+                                    {% else %}
+                                        <span class="status-pill status-pending" title="{{ s.validation.calibration_reason }}">✖ Uncalibrated</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <input type="number" step="any" name="surface_x_mm" value="{{ s.surface_x_mm if s.surface_x_mm is not none else '' }}" placeholder="X_s (mm)" class="form-control" style="padding: 5px 7px; font-size: 12px; width: 95px;" required>
+                                </td>
+                                <td>
+                                    <input type="number" step="any" name="surface_y_mm" value="{{ s.surface_y_mm if s.surface_y_mm is not none else '' }}" placeholder="Y_s (mm)" class="form-control" style="padding: 5px 7px; font-size: 12px; width: 95px;" required>
+                                </td>
+                                <td>
+                                    <input type="number" step="any" min="0" max="359.999" name="direction_angle" value="{{ s.direction_angle if s.direction_angle is not none else '' }}" placeholder="0–360°" class="form-control" style="padding: 5px 7px; font-size: 12px; width: 90px;" required>
+                                    {% if s.validation.reverse_bearing_deg is not none %}
+                                        <div style="font-size: 10.5px; color: #38bdf8; font-family: var(--font-mono); margin-top: 2px;">
+                                            Back-Ray &beta;={{ "%.1f"|format(s.validation.reverse_bearing_deg) }}°
+                                        </div>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <select name="direction_source" class="form-control" style="padding: 5px 7px; font-size: 11.5px; width: 155px;">
+                                        <option value="Examiner Supplied (Tail/Spine Morphology)" {% if 'Tail' in (s.direction_source or '') %}selected{% endif %}>Tail/Spine Morphology</option>
+                                        <option value="Independently Verified Scene Protractor" {% if 'Protractor' in (s.direction_source or '') %}selected{% endif %}>Scene Protractor Verified</option>
+                                    </select>
+                                </td>
+                                <td>
+                                    {% if s.validation.is_eligible %}
+                                        <span class="status-pill status-active">● Eligible</span>
+                                    {% else %}
+                                        <span class="status-pill status-pending" title="{{ s.validation.issues|join('; ') }}">● Incomplete</span>
+                                    {% endif %}
+                                </td>
+                                <td style="white-space: nowrap;">
+                                    <button type="submit" class="btn btn-secondary btn-sm" title="Save stain coordinates & direction">💾 Save</button>
+                            </form>
+                            <form method="POST" action="{{ url_for('reconstruction_remove_measurement', case_id=case.case_id) }}" style="display: inline;">
+                                <input type="hidden" name="measurement_id" value="{{ s.measurement_id }}">
+                                <button type="submit" class="btn btn-secondary btn-sm" style="color: var(--crimson);" title="Remove from reconstruction">✖</button>
+                            </form>
+                                </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div style="text-align: center; padding: 24px; color: var(--text-muted);">
+            No stains have been added to this reconstruction workspace yet. Click <strong>+ Add Stain</strong> in the Case Measurement Registry Pool above.
+        </div>
+    {% endif %}
+</div>
+
+<!-- D & E. Receiving-Surface Configuration & Calculate Reconstruction Action -->
+<div class="card" style="margin-bottom: 20px;">
+    <div class="card-header" style="margin-bottom: 12px; padding-bottom: 10px;">
+        <h2 class="card-title" style="font-size: 15px;">
+            <span>⚙️</span> Receiving-Surface Orientation &amp; Reconstruction Solver
+        </h2>
+    </div>
+
+    <form method="POST" action="{{ url_for('reconstruction_calculate', case_id=case.case_id) }}" style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end;">
+        <div style="min-width: 240px;">
+            <label style="font-size: 12px; font-weight: 600; color: var(--text-secondary); display: block; margin-bottom: 5px;">
+                Receiving Surface Orientation:
+            </label>
+            <select name="surface_type" class="form-control" style="padding: 8px 12px;">
+                <option value="Horizontal Floor" {% if workspace.reconstruction.surface_type == 'Horizontal Floor' %}selected{% endif %}>Horizontal Floor (Z_lab = 0, Normal +Z)</option>
+                <option value="Vertical Wall" {% if workspace.reconstruction.surface_type == 'Vertical Wall' %}selected{% endif %}>Vertical Wall (Y_lab = 0, Normal +Y)</option>
+                <option value="Inclined Surface (45°)" {% if 'Inclined' in (workspace.reconstruction.surface_type or '') %}selected{% endif %}>Inclined Surface (45° Pitch)</option>
+            </select>
+        </div>
+
+        <div style="min-width: 190px;">
+            <label style="font-size: 12px; font-weight: 600; color: var(--text-secondary); display: block; margin-bottom: 5px;">
+                Custom Pitch Angle (Optional, deg):
+            </label>
+            <input type="number" step="any" min="-90" max="90" name="incline_deg" value="{{ workspace.reconstruction.incline_deg if workspace.reconstruction.incline_deg is not none else '' }}" placeholder="e.g. 30.0" class="form-control" style="padding: 8px 12px;">
+        </div>
+
+        <div>
+            <button type="submit" class="btn btn-primary" style="padding: 10px 20px;">
+                <span>🚀</span> Calculate 2D Area of Convergence &amp; 3D Area of Origin
+            </button>
+        </div>
+    </form>
+</div>
+
+<!-- F, G, H. Calculated Reconstruction Results (2D Area of Convergence & 3D Area of Origin) -->
+{% if active_scene %}
+    {% if active_scene.warnings %}
+        {% for w_msg in active_scene.warnings %}
+            <div class="alert alert-warning" style="margin-bottom: 16px;">
+                <span>⚠️</span>
+                <div><strong>Geometric Identifiability Notice:</strong> {{ w_msg }}</div>
+            </div>
+        {% endfor %}
+    {% endif %}
+
+    <div class="workspace-grid" style="margin-bottom: 24px;">
+        <!-- F. 2D Area of Convergence Results Section -->
+        <div class="card" style="margin-bottom: 0;">
+            <div class="card-header" style="margin-bottom: 12px; padding-bottom: 10px;">
+                <h2 class="card-title" style="font-size: 15px;">
+                    <span>🎯</span> Estimated 2D Area of Convergence (Planar Surface)
+                </h2>
+                <span class="status-pill status-active">Orthogonal Least-Squares</span>
+            </div>
+
+            <div class="calc-metrics-row" style="margin-bottom: 14px;">
+                <div class="calc-metric-card">
+                    <div class="label">Estimated X_c (mm)</div>
+                    <div class="val" style="font-size: 17px; color: #38bdf8;">{{ "%.2f"|format(active_scene.convergence_2d.x_surface_mm) }}</div>
+                </div>
+                <div class="calc-metric-card">
+                    <div class="label">Estimated Y_c (mm)</div>
+                    <div class="val" style="font-size: 17px; color: #38bdf8;">{{ "%.2f"|format(active_scene.convergence_2d.y_surface_mm) }}</div>
+                </div>
+                <div class="calc-metric-card">
+                    <div class="label">Uncertainty Radius</div>
+                    <div class="val" style="font-size: 17px; color: #f59e0b;">&pm;{{ "%.2f"|format(active_scene.convergence_2d.convergence_radius_mm) }} mm</div>
+                </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 14px; font-size: 12px;">
+                <div style="padding: 8px 10px; background-color: var(--bg-main); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+                    <span style="color: var(--text-muted); display: block; font-size: 10.5px;">RMS Residual Miss</span>
+                    <strong style="font-family: var(--font-mono);">{{ "%.2f"|format(active_scene.convergence_2d.rms_residual_mm) }} mm</strong>
+                </div>
+                <div style="padding: 8px 10px; background-color: var(--bg-main); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+                    <span style="color: var(--text-muted); display: block; font-size: 10.5px;">Maximum Residual</span>
+                    <strong style="font-family: var(--font-mono);">{{ "%.2f"|format(active_scene.convergence_2d.max_residual_mm) }} mm</strong>
+                </div>
+                <div style="padding: 8px 10px; background-color: var(--bg-main); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+                    <span style="color: var(--text-muted); display: block; font-size: 10.5px;">Condition Number</span>
+                    <strong style="font-family: var(--font-mono);">{{ "%.2f"|format(active_scene.convergence_2d.condition_number) }}</strong>
+                </div>
+            </div>
+
+            <div style="font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px;">
+                Individual Stain Perpendicular Miss Distances to Convergence Centroid:
+            </div>
+            <div class="table-responsive" style="margin-bottom: 14px;">
+                <table class="data-table" style="font-size: 12px;">
+                    <thead>
+                        <tr>
+                            <th>Stain ID</th>
+                            <th>Measured Pos (X_s, Y_s)</th>
+                            <th>Back-Ray (&beta;)</th>
+                            <th>Planar Distance D_i</th>
+                            <th>2D Miss Residual</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for st in active_scene.stains %}
+                            <tr>
+                                <td><strong style="font-family: var(--font-mono); color: {{ st.color }};">{{ st.stain_id }}</strong></td>
+                                <td>({{ "%.1f"|format(st.surface_x_mm) }}, {{ "%.1f"|format(st.surface_y_mm) }}) mm</td>
+                                <td>{{ "%.1f"|format(st.reverse_azimuth_deg) }}°</td>
+                                <td>{{ "%.1f"|format(st.planar_distance_mm) }} mm</td>
+                                <td><code>{{ "%.2f"|format(st.perp_residual_2d_mm) }} mm</code></td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            {% if plot_2d_b64 %}
+                <div style="text-align: center; background-color: #070b12; padding: 8px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+                    <img src="{{ plot_2d_b64 }}" alt="2D Area of Convergence Plot" style="max-width: 100%; height: auto; border-radius: var(--radius-sm);">
+                </div>
+            {% endif %}
+        </div>
+
+        <!-- G. Estimated 3D Area of Origin Results Section -->
+        <div class="card" style="margin-bottom: 0;">
+            <div class="card-header" style="margin-bottom: 12px; padding-bottom: 10px;">
+                <h2 class="card-title" style="font-size: 15px;">
+                    <span>📍</span> Estimated 3D Area of Origin (Approximate Volume)
+                </h2>
+                <span class="status-pill status-review">Linear Stringing Model</span>
+            </div>
+
+            <!-- 1. Classical Tangent Method -->
+            <div style="padding: 12px; background-color: var(--bg-surface); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); margin-bottom: 12px;">
+                <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; color: var(--crimson); margin-bottom: 6px;">
+                    Method 1: Classical BPA Tangent Method (Z_i = D_i &times; tan(&alpha;_i))
+                </div>
+                <div class="calc-metrics-row" style="margin-bottom: 6px;">
+                    <div class="calc-metric-card">
+                        <div class="label">Origin X (Surface)</div>
+                        <div class="val" style="font-size: 15px;">{{ "%.1f"|format(active_scene.tangent_origin_3d.x_surface_mm) }} mm</div>
+                    </div>
+                    <div class="calc-metric-card">
+                        <div class="label">Origin Y (Surface)</div>
+                        <div class="val" style="font-size: 15px;">{{ "%.1f"|format(active_scene.tangent_origin_3d.y_surface_mm) }} mm</div>
+                    </div>
+                    <div class="calc-metric-card">
+                        <div class="label">Mean Height Z &pm; &sigma;_Z</div>
+                        <div class="val" style="font-size: 15px; color: var(--crimson);">
+                            {{ "%.1f"|format(active_scene.tangent_origin_3d.z_mean_surface_mm) }} &pm; {{ "%.1f"|format(active_scene.tangent_origin_3d.z_combined_uncertainty_mm) }} mm
+                        </div>
+                    </div>
+                </div>
+                <div style="font-size: 11.5px; color: var(--text-muted);">
+                    Height Range: <code>[{{ "%.1f"|format(active_scene.tangent_origin_3d.z_range_surface_mm[0]) }}, {{ "%.1f"|format(active_scene.tangent_origin_3d.z_range_surface_mm[1]) }}] mm</code> |
+                    Sample Std Dev: <code>{{ "%.2f"|format(active_scene.tangent_origin_3d.z_std_surface_mm) }} mm</code>
+                </div>
+            </div>
+
+            <!-- 2. 3D Skew-Ray Closest Point of Approach -->
+            <div style="padding: 12px; background-color: var(--bg-surface); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); margin-bottom: 14px;">
+                <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; color: var(--status-active); margin-bottom: 6px;">
+                    Method 2: 3D Skew-Ray Closest Point of Approach (CPA — Global Lab Coordinates)
+                </div>
+                <div class="calc-metrics-row" style="margin-bottom: 6px;">
+                    <div class="calc-metric-card">
+                        <div class="label">Est. Lab X (mm)</div>
+                        <div class="val" style="font-size: 15px; color: var(--status-active);">{{ "%.1f"|format(active_scene.cpa_origin_3d.point_lab_mm[0]) }}</div>
+                    </div>
+                    <div class="calc-metric-card">
+                        <div class="label">Est. Lab Y (mm)</div>
+                        <div class="val" style="font-size: 15px; color: var(--status-active);">{{ "%.1f"|format(active_scene.cpa_origin_3d.point_lab_mm[1]) }}</div>
+                    </div>
+                    <div class="calc-metric-card">
+                        <div class="label">Est. Lab Z (mm)</div>
+                        <div class="val" style="font-size: 15px; color: var(--status-active);">{{ "%.1f"|format(active_scene.cpa_origin_3d.point_lab_mm[2]) }}</div>
+                    </div>
+                </div>
+                <div style="font-size: 11.5px; color: var(--text-muted);">
+                    3D Skew-Ray RMS Miss Distance: <code>{{ "%.2f"|format(active_scene.cpa_origin_3d.rms_3d_miss_mm) }} mm</code> |
+                    Surface Orientation: <strong>{{ active_scene.surface_basis.surface_type }}</strong>
+                </div>
+            </div>
+
+            {% if plot_3d_b64 %}
+                <div style="text-align: center; background-color: #070b12; padding: 8px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); margin-bottom: 12px;">
+                    <img src="{{ plot_3d_b64 }}" alt="3D Area of Origin Reconstruction Plot" style="max-width: 100%; height: auto; border-radius: var(--radius-sm);">
+                </div>
+            {% endif %}
+
+            <!-- H. Link to Phase 4.2 Interactive 3D Visualization -->
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;">
+                <span style="font-size: 11.5px; color: var(--text-muted);">
+                    Inspect this reconstruction with interactive 3D orbit, zoom, and ray toggles:
+                </span>
+                <a href="{{ url_for('trajectory_laboratory', reconstruction_id=workspace.reconstruction.reconstruction_id, case_id=case.case_id) }}" class="btn btn-primary btn-sm">
+                    <span>🌐</span> Launch Interactive 3D Scene
+                </a>
+            </div>
+        </div>
+    </div>
+{% endif %}
+{% endblock %}
+

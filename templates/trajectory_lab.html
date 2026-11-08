@@ -1,0 +1,363 @@
+{% extends "base.html" %}
+
+{% block title %}3D Trajectory Reconstruction Lab{% endblock %}
+{% block breadcrumb %}Forensic Workspaces / 3D Trajectory Reconstruction Lab{% endblock %}
+
+{% block content %}
+<!-- Header Card -->
+<div class="card" style="margin-bottom: 20px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px;">
+        <div>
+            <h1 class="card-title" style="font-size: 18px;">
+                <span>🧭</span> 3D Spatial Trajectory Reconstruction &amp; Convergence Laboratory
+            </h1>
+            <p style="color: var(--text-muted); font-size: 13px; margin-top: 4px;">
+                Multi-stain 2D Area of Convergence &amp; 3D Area of Origin reconstruction using orthogonal least-squares and trigonometric stringing.
+            </p>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <span class="badge" style="background-color: rgba(16,185,129,0.15); color: var(--status-active); border: 1px solid rgba(16,185,129,0.3);">
+                Phase 4.2 Visualization Active
+            </span>
+            <a href="{{ url_for('measurement_workspace') }}" class="btn btn-secondary btn-sm">
+                <span>📐</span> Open Measurement Lab
+            </a>
+        </div>
+    </div>
+</div>
+
+<!-- Mandatory Scientific & Forensic Limitation Banner -->
+<div class="alert alert-warning" style="margin-bottom: 20px; align-items: flex-start;">
+    <span style="font-size: 18px;">⚠️</span>
+    <div>
+        <strong>Scientific &amp; Forensic Model Limitation (Straight-Line Stringing Approximation):</strong><br>
+        Back-projected rays model linear trajectories (<code>Z = D &times; tan(&alpha;)</code>) and <strong>neglect gravitational acceleration and aerodynamic drag</strong>, which systematically overestimates the true source height (<code>Z</code>). An elliptical stain alone has a 180° directional ambiguity; direction of travel (&gamma;) must be supplied from physical tail/spine morphology. Calculated intersections represent an <strong>approximate 2D Area of Convergence and 3D Area of Origin with uncertainty bounds</strong>, never an exact point source.
+    </div>
+</div>
+
+{% if traj_error %}
+    <div class="alert alert-danger" role="alert">
+        <strong>❌ Trajectory Reconstruction Validation Error:</strong> {{ traj_error }}
+    </div>
+{% endif %}
+
+<!-- Controls & Preset Loader Card -->
+<div class="card" style="margin-bottom: 20px;">
+    <div class="card-header" style="margin-bottom: 14px; padding-bottom: 10px;">
+        <h2 class="card-title" style="font-size: 15px;">
+            <span>🎛️</span> Receiving Surface Configuration &amp; Multi-Stain Dataset Controls
+        </h2>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <a href="{{ url_for('trajectory_laboratory', preset='floor_radial') }}" class="btn btn-secondary btn-sm">
+                🩸 Preset 1: Horizontal Floor Spatter (3 Stains)
+            </a>
+            <a href="{{ url_for('trajectory_laboratory', preset='vertical_wall') }}" class="btn btn-secondary btn-sm">
+                🧱 Preset 2: Vertical Wall Impact (4 Stains)
+            </a>
+            <a href="{{ url_for('trajectory_laboratory', preset='inclined_45') }}" class="btn btn-secondary btn-sm">
+                📐 Preset 3: Inclined Surface 45° (3 Stains)
+            </a>
+        </div>
+    </div>
+
+    <form method="POST" action="{{ url_for('trajectory_laboratory') }}" id="trajectory-form">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 14px;">
+            <div>
+                <label style="font-size: 12px; font-weight: 600; color: var(--text-secondary); display: block; margin-bottom: 5px;">
+                    Receiving Target Surface Orientation:
+                </label>
+                <select name="surface_type" class="form-control" style="padding: 8px 12px;">
+                    <option value="Horizontal Floor" {% if surface_type == 'Horizontal Floor' %}selected{% endif %}>Horizontal Floor (Normal +Z)</option>
+                    <option value="Vertical Wall" {% if surface_type == 'Vertical Wall' %}selected{% endif %}>Vertical Wall (Y=0, Normal +Y)</option>
+                    <option value="Inclined Surface (45°)" {% if 'Inclined' in surface_type %}selected{% endif %}>Inclined Surface (45° Pitch)</option>
+                </select>
+            </div>
+
+            <div>
+                <label style="font-size: 12px; font-weight: 600; color: var(--text-secondary); display: block; margin-bottom: 5px;">
+                    Custom Incline Angle (Optional, deg):
+                </label>
+                <input type="number" step="any" min="-90" max="90" name="incline_deg" value="{{ incline_deg if incline_deg is not none else '' }}" placeholder="e.g. 30.0 (leave blank for preset)" class="form-control" style="padding: 8px 12px;">
+            </div>
+
+            <div>
+                <label style="font-size: 12px; font-weight: 600; color: var(--text-secondary); display: block; margin-bottom: 5px;">
+                    Load From Registered Case (Optional):
+                </label>
+                <div style="display: flex; gap: 8px;">
+                    <select name="case_id" class="form-control" style="padding: 8px 12px;">
+                        <option value="">-- Use Table Inputs Below --</option>
+                        {% for c in cases %}
+                            <option value="{{ c.case_id }}" {% if selected_case == c.case_id %}selected{% endif %}>
+                                {{ c.case_id }} — {{ c.title[:22] }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                    <button type="submit" name="load_case_stains" value="true" class="btn btn-secondary btn-sm">Load Case</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Editable Multi-Stain Input Table -->
+        <div class="table-responsive" style="margin-bottom: 14px;">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Stain ID</th>
+                        <th>Minor Axis W (mm)</th>
+                        <th>Major Axis L (mm)</th>
+                        <th>Surface X_s (mm)</th>
+                        <th>Surface Y_s (mm)</th>
+                        <th>Supplied Travel Azimuth &gamma; (0–360°)</th>
+                        <th>Azimuth Uncertainty &pm;&sigma;<sub>&gamma;</sub> (°)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in input_rows %}
+                        <tr>
+                            <td>
+                                <input type="text" name="stain_id" value="{{ row.stain_id }}" class="form-control" style="padding: 6px 8px; font-family: var(--font-mono); font-size: 12.5px;" required>
+                            </td>
+                            <td>
+                                <input type="number" step="any" name="width" value="{{ row.width }}" class="form-control" style="padding: 6px 8px; font-size: 12.5px;" required>
+                            </td>
+                            <td>
+                                <input type="number" step="any" name="length" value="{{ row.length }}" class="form-control" style="padding: 6px 8px; font-size: 12.5px;" required>
+                            </td>
+                            <td>
+                                <input type="number" step="any" name="surface_x_mm" value="{{ row.surface_x_mm }}" class="form-control" style="padding: 6px 8px; font-size: 12.5px;" required>
+                            </td>
+                            <td>
+                                <input type="number" step="any" name="surface_y_mm" value="{{ row.surface_y_mm }}" class="form-control" style="padding: 6px 8px; font-size: 12.5px;" required>
+                            </td>
+                            <td>
+                                <input type="number" step="any" name="gamma_deg" value="{{ row.gamma_deg }}" class="form-control" style="padding: 6px 8px; font-size: 12.5px;" placeholder="Required (0-360°)" required>
+                            </td>
+                            <td>
+                                <input type="number" step="any" min="0.1" name="sigma_gamma_deg" value="{{ row.sigma_gamma_deg }}" class="form-control" style="padding: 6px 8px; font-size: 12.5px;">
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 10px;">
+            <button type="submit" class="btn btn-primary">
+                <span>🚀</span> Reconstruct 2D Convergence &amp; 3D Area of Origin
+            </button>
+        </div>
+    </form>
+</div>
+
+{% if scene %}
+    <!-- Top Summary KPI Metrics Row -->
+    <div class="stats-grid" style="margin-bottom: 20px;">
+        <div class="stat-card">
+            <div class="stat-icon-wrapper">🎯</div>
+            <div class="stat-content">
+                <div class="stat-label">2D Area of Convergence (X_c, Y_c)</div>
+                <div class="stat-value" style="font-size: 18px;">
+                    ({{ "%.1f"|format(scene.convergence_2d.x_surface_mm) }}, {{ "%.1f"|format(scene.convergence_2d.y_surface_mm) }}) mm
+                </div>
+                <div style="font-size: 11px; color: var(--text-muted);">
+                    RMS Miss: {{ "%.2f"|format(scene.convergence_2d.rms_residual_mm) }} mm | Radius: &pm;{{ "%.1f"|format(scene.convergence_2d.convergence_radius_mm) }} mm
+                </div>
+            </div>
+        </div>
+
+        <div class="stat-card">
+            <div class="stat-icon-wrapper">📐</div>
+            <div class="stat-content">
+                <div class="stat-label">Tangent-Method Origin Height (Z)</div>
+                <div class="stat-value" style="font-size: 18px; color: var(--crimson);">
+                    {{ "%.1f"|format(scene.tangent_origin_3d.z_mean_surface_mm) }} &pm; {{ "%.1f"|format(scene.tangent_origin_3d.z_combined_uncertainty_mm) }} mm
+                </div>
+                <div style="font-size: 11px; color: var(--text-muted);">
+                    Range: [{{ "%.1f"|format(scene.tangent_origin_3d.z_range_surface_mm[0]) }}, {{ "%.1f"|format(scene.tangent_origin_3d.z_range_surface_mm[1]) }}] mm
+                </div>
+            </div>
+        </div>
+
+        <div class="stat-card">
+            <div class="stat-icon-wrapper">📍</div>
+            <div class="stat-content">
+                <div class="stat-label">3D Skew-Ray CPA Estimate (Lab Frame)</div>
+                <div class="stat-value" style="font-size: 18px; color: var(--status-active);">
+                    ({{ "%.1f"|format(scene.cpa_origin_3d.point_lab_mm[0]) }}, {{ "%.1f"|format(scene.cpa_origin_3d.point_lab_mm[1]) }}, {{ "%.1f"|format(scene.cpa_origin_3d.point_lab_mm[2]) }}) mm
+                </div>
+                <div style="font-size: 11px; color: var(--text-muted);">
+                    3D RMS Miss Distance: {{ "%.2f"|format(scene.cpa_origin_3d.rms_3d_miss_mm) }} mm
+                </div>
+            </div>
+        </div>
+
+        <div class="stat-card">
+            <div class="stat-icon-wrapper">🧱</div>
+            <div class="stat-content">
+                <div class="stat-label">Active Receiving Surface</div>
+                <div class="stat-value" style="font-size: 15px;">
+                    {{ scene.surface_basis.surface_type }}
+                </div>
+                <div style="font-size: 11px; color: var(--text-muted);">
+                    {{ scene.stain_count }} Directional Stains Analyzed
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Interactive 3D Inspection Station + Selected Stain Telemetry -->
+    <div class="workspace-grid" style="margin-bottom: 24px;">
+        <!-- Left: Interactive HTML5 3D Canvas Viewport -->
+        <div class="card" style="margin-bottom: 0;">
+            <div class="card-header" style="margin-bottom: 12px; padding-bottom: 10px;">
+                <h2 class="card-title" style="font-size: 15px;">
+                    <span>🌐</span> Interactive 3D Trajectory Inspection Viewport
+                </h2>
+                <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                    <button type="button" class="btn btn-secondary btn-sm" id="btnCamReset">🔄 Reset Camera</button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="btnCamTop">⬇️ Top (XY)</button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="btnCamFront">➡️ Front (XZ)</button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="btnCamSide">↗️ Side (YZ)</button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="btnZoomIn">➕</button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="btnZoomOut">➖</button>
+                </div>
+            </div>
+
+            <div style="position: relative; border: 1px solid var(--border-strong); border-radius: var(--radius-md); overflow: hidden; background-color: #090d16;">
+                <canvas id="trajectory3DCanvas" width="760" height="440" style="width: 100%; height: auto; display: block; cursor: grab;"></canvas>
+            </div>
+
+            <!-- Layer Visibility & Trajectory Toggles -->
+            <div style="margin-top: 12px; padding: 10px 14px; background-color: var(--bg-surface); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+                <div style="display: flex; gap: 14px; align-items: center; flex-wrap: wrap; font-size: 12px;">
+                    <strong style="color: var(--text-muted); text-transform: uppercase; font-size: 11px;">Scene Layers:</strong>
+                    <label style="display: inline-flex; align-items: center; gap: 5px; cursor: pointer;">
+                        <input type="checkbox" id="toggleFloor" checked> Floor Plane
+                    </label>
+                    <label style="display: inline-flex; align-items: center; gap: 5px; cursor: pointer;">
+                        <input type="checkbox" id="toggleWall" checked> Reference Wall
+                    </label>
+                    <label style="display: inline-flex; align-items: center; gap: 5px; cursor: pointer;">
+                        <input type="checkbox" id="toggleUncertainty" checked> Origin Uncertainty Zone
+                    </label>
+                </div>
+
+                <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px;">
+                    <strong style="color: var(--text-muted); text-transform: uppercase; font-size: 11px;">Toggle Rays:</strong>
+                    {% for st in scene.stains %}
+                        <label style="display: inline-flex; align-items: center; gap: 4px; cursor: pointer; color: {{ st.color }}; font-family: var(--font-mono);">
+                            <input type="checkbox" class="stain-vis-toggle" data-stain-id="{{ st.stain_id }}" checked>
+                            {{ st.stain_id }}
+                        </label>
+                    {% endfor %}
+                </div>
+            </div>
+            <p class="form-hint" style="margin-top: 6px;">
+                Drag to rotate 3D scene • Scroll wheel to zoom • Hold <code>Shift + Drag</code> to pan • Click any stain node to inspect its trajectory telemetry.
+            </p>
+        </div>
+
+        <!-- Right: Selected Stain Inspector & Legend -->
+        <div class="card" style="margin-bottom: 0;">
+            <div class="card-header" style="margin-bottom: 12px; padding-bottom: 10px;">
+                <h2 class="card-title" style="font-size: 15px;">
+                    <span>🔬</span> Individual Stain Trajectory Inspector
+                </h2>
+                <span class="status-pill status-active" id="insp-stain-id">{{ scene.stains[0].stain_id }}</span>
+            </div>
+
+            <!-- Stain Selector Pills -->
+            <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px;">
+                {% for st in scene.stains %}
+                    <button type="button" class="btn btn-secondary btn-sm stain-select-btn {% if loop.first %}active{% endif %}" data-stain-id="{{ st.stain_id }}" style="border-left: 3px solid {{ st.color }};">
+                        {{ st.stain_id }} ({{ "%.1f"|format(st.angle_degrees) }}°)
+                    </button>
+                {% endfor %}
+            </div>
+
+            <!-- Telemetry Readout Grid -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 12.5px;">
+                <div style="padding: 10px; background-color: var(--bg-main); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);">
+                    <div style="font-size: 10.5px; color: var(--text-muted); text-transform: uppercase;">Measured Ellipse Axes</div>
+                    <div id="insp-dimensions" style="font-family: var(--font-mono); color: var(--text-primary); font-weight: 600; margin-top: 2px;"></div>
+                </div>
+                <div style="padding: 10px; background-color: var(--bg-main); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);">
+                    <div style="font-size: 10.5px; color: var(--text-muted); text-transform: uppercase;">Calculated Impact Angle (&alpha;)</div>
+                    <div id="insp-angle" style="font-family: var(--font-mono); color: var(--crimson); font-weight: 700; margin-top: 2px;"></div>
+                </div>
+                <div style="padding: 10px; background-color: var(--bg-main); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); grid-column: span 2;">
+                    <div style="font-size: 10.5px; color: var(--text-muted); text-transform: uppercase;">Supplied Travel Azimuth (&gamma;) &amp; Back-Projection (&beta;)</div>
+                    <div id="insp-azimuth" style="font-family: var(--font-mono); color: #38bdf8; font-weight: 600; margin-top: 2px;"></div>
+                </div>
+                <div style="padding: 10px; background-color: var(--bg-main); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);">
+                    <div style="font-size: 10.5px; color: var(--text-muted); text-transform: uppercase;">2D Surface Coord (X_s, Y_s)</div>
+                    <div id="insp-surface-pos" style="font-family: var(--font-mono); color: var(--text-primary); margin-top: 2px;"></div>
+                </div>
+                <div style="padding: 10px; background-color: var(--bg-main); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);">
+                    <div style="font-size: 10.5px; color: var(--text-muted); text-transform: uppercase;">3D Lab Coord (X_L, Y_L, Z_L)</div>
+                    <div id="insp-lab-pos" style="font-family: var(--font-mono); color: var(--text-primary); margin-top: 2px;"></div>
+                </div>
+                <div style="padding: 10px; background-color: var(--bg-main); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);">
+                    <div style="font-size: 10.5px; color: var(--text-muted); text-transform: uppercase;">Planar Distance to Conv (D_i)</div>
+                    <div id="insp-distance" style="font-family: var(--font-mono); color: var(--text-primary); margin-top: 2px;"></div>
+                </div>
+                <div style="padding: 10px; background-color: var(--bg-main); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);">
+                    <div style="font-size: 10.5px; color: var(--text-muted); text-transform: uppercase;">Tangent Height Z_i = D_i tan(&alpha;)</div>
+                    <div id="insp-height" style="font-family: var(--font-mono); color: var(--status-active); font-weight: 600; margin-top: 2px;"></div>
+                </div>
+                <div style="padding: 10px; background-color: var(--bg-main); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); grid-column: span 2;">
+                    <div style="font-size: 10.5px; color: var(--text-muted); text-transform: uppercase;">2D Perpendicular Miss Distance to Convergence</div>
+                    <div id="insp-residual" style="font-family: var(--font-mono); color: #fcd34d; font-weight: 600; margin-top: 2px;"></div>
+                </div>
+            </div>
+
+            <!-- Scientific Legend -->
+            <div style="margin-top: 14px; padding: 12px; background-color: var(--bg-surface); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); font-size: 11.5px; color: var(--text-secondary);">
+                <div style="font-weight: 700; color: var(--text-primary); margin-bottom: 6px; text-transform: uppercase; font-size: 10.5px;">Forensic Scene Legend:</div>
+                <div><span style="color: #f59e0b;">●</span> <strong>2D Area of Convergence:</strong> Planar intersection of surface ray projections.</div>
+                <div><span style="color: #e11d48;">▲</span> <strong>Tangent-Method 3D Origin:</strong> Mean height <code>Z = D &times; tan(&alpha;)</code> above 2D convergence.</div>
+                <div><span style="color: #10b981;">◆</span> <strong>3D Skew-Ray CPA:</strong> Least-squares closest point of approach in 3D space.</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- High-Resolution Scientific Matplotlib Plots (2D Area of Convergence + 3D Trajectory Scene) -->
+    <div class="workspace-grid" style="margin-bottom: 24px;">
+        <div class="card" style="margin-bottom: 0;">
+            <div class="card-header" style="margin-bottom: 12px; padding-bottom: 10px;">
+                <h2 class="card-title" style="font-size: 15px;">
+                    <span>📐</span> 2D Area of Convergence Diagram (Planar Surface Frame)
+                </h2>
+                <span class="badge" style="background-color: var(--bg-surface); color: var(--text-secondary);">
+                    RMS Residual: {{ "%.2f"|format(scene.convergence_2d.rms_residual_mm) }} mm
+                </span>
+            </div>
+            <div style="text-align: center; background-color: #070b12; padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+                <img src="{{ plot_2d_b64 }}" alt="2D Area of Convergence Plot" style="max-width: 100%; height: auto; border-radius: var(--radius-sm);">
+            </div>
+        </div>
+
+        <div class="card" style="margin-bottom: 0;">
+            <div class="card-header" style="margin-bottom: 12px; padding-bottom: 10px;">
+                <h2 class="card-title" style="font-size: 15px;">
+                    <span>🧊</span> 3D Spatial Trajectory Reconstruction (Laboratory Frame)
+                </h2>
+                <span class="badge" style="background-color: var(--bg-surface); color: var(--text-secondary);">
+                    3D CPA Miss: {{ "%.2f"|format(scene.cpa_origin_3d.rms_3d_miss_mm) }} mm
+                </span>
+            </div>
+            <div style="text-align: center; background-color: #070b12; padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+                <img src="{{ plot_3d_b64 }}" alt="3D Trajectory Reconstruction Plot" style="max-width: 100%; height: auto; border-radius: var(--radius-sm);">
+            </div>
+        </div>
+    </div>
+
+    <script id="trajectorySceneData" type="application/json">{{ scene_json|safe }}</script>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/trajectory_3d.js') }}"></script>
+{% endblock %}
+
