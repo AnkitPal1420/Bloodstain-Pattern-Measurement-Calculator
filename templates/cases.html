@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+
+{% block title %}Case Registry{% endblock %}
+{% block breadcrumb %}Forensic Case Registry{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <div>
+            <h1 class="card-title">
+                <span>📁</span> Forensic Case Management Registry
+            </h1>
+            <p style="color: var(--text-muted); font-size: 13px; margin-top: 4px;">
+                Manage investigative cases, chain of custody logs, and associated spatter evidence records.
+            </p>
+        </div>
+        <div>
+            <a href="{{ url_for('new_case') }}" class="btn btn-primary">
+                <span>➕</span> Create New Case
+            </a>
+        </div>
+    </div>
+
+    <!-- Search & Filter Bar -->
+    <form method="GET" action="{{ url_for('cases_list') }}" class="filter-bar">
+        <div class="filter-search">
+            <input 
+                type="text" 
+                name="search" 
+                class="form-control" 
+                placeholder="Search by Case ID, Title, Reference, or Examiner..."
+                value="{{ search_query if search_query else '' }}"
+            >
+        </div>
+        <div>
+            <select name="status" class="form-control" onchange="this.form.submit()">
+                <option value="All" {% if not status_filter or status_filter == 'All' %}selected{% endif %}>All Statuses</option>
+                <option value="Active" {% if status_filter == 'Active' %}selected{% endif %}>Active</option>
+                <option value="Under Review" {% if status_filter == 'Under Review' %}selected{% endif %}>Under Review</option>
+                <option value="Completed" {% if status_filter == 'Completed' %}selected{% endif %}>Completed</option>
+                <option value="Archived" {% if status_filter == 'Archived' %}selected{% endif %}>Archived</option>
+            </select>
+        </div>
+        <button type="submit" class="btn btn-secondary">Filter</button>
+        {% if search_query or (status_filter and status_filter != 'All') %}
+            <a href="{{ url_for('cases_list') }}" class="btn btn-secondary btn-sm" style="color: var(--crimson);">Clear Filters</a>
+        {% endif %}
+    </form>
+
+    <!-- Cases Data Table -->
+    {% if cases %}
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Case Identifier</th>
+                        <th>Case Title &amp; Scene Details</th>
+                        <th>Reference Number</th>
+                        <th>Lead Examiner</th>
+                        <th>Exam Date</th>
+                        <th>Evidence Items</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for c in cases %}
+                        <tr>
+                            <td>
+                                <span class="case-id-badge">{{ c.case_id }}</span>
+                            </td>
+                            <td>
+                                <strong style="color: var(--text-primary); font-size: 14px;">{{ c.title }}</strong>
+                                {% if c.description %}
+                                    <div style="font-size: 12px; color: var(--text-muted); max-width: 340px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                        {{ c.description }}
+                                    </div>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <code style="font-size: 12px; color: var(--text-secondary);">{{ c.reference_no }}</code>
+                            </td>
+                            <td>{{ c.examiner }}</td>
+                            <td>{{ c.examination_date }}</td>
+                            <td>
+                                <span class="badge" style="background-color: var(--bg-surface); color: var(--text-secondary); border: 1px solid var(--border-subtle);">
+                                    {{ c.evidence_count }} Items
+                                </span>
+                            </td>
+                            <td>
+                                {% if c.status == 'Active' %}
+                                    <span class="status-pill status-active">● Active</span>
+                                {% elif c.status == 'Under Review' %}
+                                    <span class="status-pill status-review">● Under Review</span>
+                                {% elif c.status == 'Completed' %}
+                                    <span class="status-pill status-completed">● Completed</span>
+                                {% else %}
+                                    <span class="status-pill status-archived">● {{ c.status }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div style="display: flex; gap: 6px;">
+                                    <a href="{{ url_for('case_detail', case_id=c.case_id) }}" class="btn btn-secondary btn-sm">Inspect</a>
+                                    <a href="{{ url_for('new_evidence') }}?case_id={{ c.case_id }}" class="btn btn-primary btn-sm" title="Log Evidence to Case">+ Evd</a>
+                                </div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div style="text-align: center; padding: 40px 20px; color: var(--text-muted);">
+            <div style="font-size: 36px; margin-bottom: 8px;">📂</div>
+            <h3>No Forensic Cases Found</h3>
+            <p style="margin: 8px 0 16px;">No cases match your filter criteria or no cases have been created yet.</p>
+            <a href="{{ url_for('new_case') }}" class="btn btn-primary">Create Your First Case</a>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}
+

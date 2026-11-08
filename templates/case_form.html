@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+
+{% block title %}Create New Case{% endblock %}
+{% block breadcrumb %}Case Registry / New Forensic Case{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width: 800px; margin: 0 auto;">
+    <div class="card-header">
+        <h1 class="card-title">
+            <span>➕</span> Initiate New Forensic Investigation Case
+        </h1>
+        <a href="{{ url_for('cases_list') }}" class="btn btn-secondary btn-sm">← Back to Registry</a>
+    </div>
+
+    <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 20px;">
+        Register a new bloodstain pattern analysis case. A unique system identifier has been automatically generated for evidence tracking.
+    </p>
+
+    <form method="POST" action="{{ url_for('new_case') }}">
+        <div class="form-grid">
+            <div class="form-group">
+                <label for="case_id">Case Identification Number (Auto-Generated):</label>
+                <input 
+                    type="text" 
+                    class="form-control" 
+                    id="case_id" 
+                    name="case_id" 
+                    value="{{ generated_id }}" 
+                    readonly
+                    style="font-family: var(--font-mono); font-weight: 700; background-color: var(--bg-main); color: var(--crimson);"
+                    required
+                >
+                <p class="form-hint">Unique laboratory case tracking key (BPA-YYYY-NNNN).</p>
+            </div>
+
+            <div class="form-group">
+                <label for="reference_no">Agency / Police Reference Number:</label>
+                <input 
+                    type="text" 
+                    class="form-control" 
+                    id="reference_no" 
+                    name="reference_no" 
+                    placeholder="e.g. REF-CR-2026-9901" 
+                    required
+                >
+                <p class="form-hint">External incident number or law enforcement reference.</p>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="title">Case Title / Incident Description:</label>
+            <input 
+                type="text" 
+                class="form-control" 
+                id="title" 
+                name="title" 
+                placeholder="e.g. Crime Scene Investigation — 405 Oakwood Avenue" 
+                required
+            >
+            <p class="form-hint">Concise descriptive title of the investigation.</p>
+        </div>
+
+        <div class="form-grid">
+            <div class="form-group">
+                <label for="examination_date">Date of Forensic Examination:</label>
+                <input 
+                    type="date" 
+                    class="form-control" 
+                    id="examination_date" 
+                    name="examination_date" 
+                    value="{{ current_date }}" 
+                    required
+                >
+            </div>
+
+            <div class="form-group">
+                <label for="examiner">Lead Forensic Examiner / Analyst:</label>
+                <input 
+                    type="text" 
+                    class="form-control" 
+                    id="examiner" 
+                    name="examiner" 
+                    placeholder="e.g. Dr. H. Lee, Lead BPA Specialist" 
+                    required
+                >
+            </div>
+        </div>
+
+        <div class="form-grid">
+            <div class="form-group">
+                <label for="status">Initial Investigation Status:</label>
+                <select name="status" id="status" class="form-control">
+                    <option value="Active" selected>Active Investigation</option>
+                    <option value="Under Review">Under Review / Peer Verification</option>
+                    <option value="Completed">Completed Examination</option>
+                    <option value="Archived">Archived Case File</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="description">Detailed Scene Notes &amp; Environmental Factors:</label>
+            <textarea 
+                class="form-control" 
+                id="description" 
+                name="description" 
+                placeholder="Describe substrate materials, target surfaces (drywall, carpet, wood), ambient room temperature, observed spatter mechanisms, and initial notes..."
+            ></textarea>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px; border-top: 1px solid var(--border-subtle); padding-top: 18px;">
+            <a href="{{ url_for('cases_list') }}" class="btn btn-secondary">Cancel</a>
+            <button type="submit" class="btn btn-primary">Create Forensic Case</button>
+        </div>
+    </form>
+</div>
+{% endblock %}
+

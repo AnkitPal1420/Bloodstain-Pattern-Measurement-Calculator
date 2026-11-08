@@ -1,18 +1,22 @@
 # Bloodstain Pattern Measurement Calculator Dependencies
-# Core web interface
-streamlit>=1.35.0
 
-# Scientific computing & data arrays
-numpy>=1.26.0
+# Core web application framework
+Flask>=3.1.0
 
-# Data visualization & plotting
-matplotlib>=3.8.0
+# Scientific computing, numerical arrays & statistical calculations
+numpy>=2.0.0
+scipy>=1.14.0
 
-# Computer vision (headless for server and desktop portability)
-opencv-python-headless>=4.9.0.80
+# Computer vision & image processing (Milestone 2)
+opencv-python>=5.0.0
+pillow>=13.0.0
 
-# PDF report generation
-reportlab>=4.2.0
+# Data analysis & plotting / visualization
+matplotlib>=3.11.0
+pandas>=3.1.0
 
-# Automated testing framework
-pytest>=8.0.0
+# PDF forensic report generation (Milestone 3)
+reportlab>=5.1.0
+
+# Automated test suite
+pytest>=9.0.0

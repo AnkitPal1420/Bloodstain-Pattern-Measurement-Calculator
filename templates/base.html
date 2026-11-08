@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Forensic Laboratory Suite{% endblock %} — Bloodstain Pattern Analysis</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="app-sidebar" id="appSidebar">
+            <div class="sidebar-brand">
+                <div class="brand-icon">🩸</div>
+                <div>
+                    <div class="brand-title">BPMS LabSuite</div>
+                    <div class="brand-subtitle">Forensic Analysis v2.0</div>
+                </div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <div class="nav-section-title">Core Operations</div>
+                
+                <a href="{{ url_for('index') }}" class="nav-item {% if active_page == 'dashboard' %}active{% endif %}">
+                    <span class="nav-icon">📊</span>
+                    <span>Dashboard</span>
+                </a>
+
+                <a href="{{ url_for('cases_list') }}" class="nav-item {% if active_page == 'cases' %}active{% endif %}">
+                    <span class="nav-icon">📁</span>
+                    <span>Case Registry</span>
+                    {% if nav_stats and nav_stats.total_cases %}
+                        <span class="nav-badge">{{ nav_stats.total_cases }}</span>
+                    {% endif %}
+                </a>
+
+                <a href="{{ url_for('evidence_list') }}" class="nav-item {% if active_page == 'evidence' %}active{% endif %}">
+                    <span class="nav-icon">🔬</span>
+                    <span>Evidence Vault</span>
+                    {% if nav_stats and nav_stats.total_evidence %}
+                        <span class="nav-badge">{{ nav_stats.total_evidence }}</span>
+                    {% endif %}
+                </a>
+
+                <div class="nav-section-title">Forensic Workspaces</div>
+
+                <a href="{{ url_for('measurement_workspace') }}" class="nav-item {% if active_page == 'measurement' %}active{% endif %}">
+                    <span class="nav-icon">📐</span>
+                    <span>Measurement Lab</span>
+                </a>
+
+                <a href="{{ url_for('results_dashboard') }}" class="nav-item {% if active_page == 'results' %}active{% endif %}">
+                    <span class="nav-icon">📈</span>
+                    <span>Results &amp; Trajectory</span>
+                </a>
+
+                <div class="nav-section-title">Quick Actions</div>
+
+                <a href="{{ url_for('new_case') }}" class="nav-item">
+                    <span class="nav-icon">➕</span>
+                    <span>New Forensic Case</span>
+                </a>
+
+                <a href="{{ url_for('new_evidence') }}" class="nav-item">
+                    <span class="nav-icon">🏷️</span>
+                    <span>Log New Evidence</span>
+                </a>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="laboratory-tag">
+                    <div class="system-status-dot"></div>
+                    <span>LIMS Engine Online</span>
+                </div>
+                <div>Python 3.14 • SQLite Verified</div>
+            </div>
+        </aside>
+
+        <!-- Main Workspace Area -->
+        <div class="app-main">
+            <!-- Topbar Header -->
+            <header class="app-topbar">
+                <div class="topbar-left">
+                    <button class="menu-toggle" id="menuToggle" aria-label="Toggle navigation">☰</button>
+                    <div class="page-breadcrumb">
+                        <span>Forensic System</span>
+                        <span>/</span>
+                        <span class="current-page">{% block breadcrumb %}Dashboard{% endblock %}</span>
+                    </div>
+                </div>
+
+                <div class="topbar-right">
+                    <div class="examiner-pill">
+                        <div class="examiner-avatar">FA</div>
+                        <span>Duty Examiner: <strong>BPA Unit 01</strong></span>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Page Body -->
+            <main class="page-body">
+                <!-- Flash Messages -->
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                        {% for category, message in messages %}
+                            <div class="alert alert-{{ category if category != 'error' else 'danger' }}">
+                                <span>{{ message }}</span>
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+                {% endwith %}
+
+                {% block content %}{% endblock %}
+            </main>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>
+

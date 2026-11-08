@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+
+{% block title %}Case {{ case.case_id }} — Details{% endblock %}
+{% block breadcrumb %}Case Registry / {{ case.case_id }}{% endblock %}
+
+{% block content %}
+<!-- Case Header Card -->
+<div class="card">
+    <div class="card-header">
+        <div>
+            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 6px;">
+                <span class="case-id-badge" style="font-size: 15px; padding: 4px 10px;">{{ case.case_id }}</span>
+                {% if case.status == 'Active' %}
+                    <span class="status-pill status-active">● Active</span>
+                {% elif case.status == 'Under Review' %}
+                    <span class="status-pill status-review">● Under Review</span>
+                {% elif case.status == 'Completed' %}
+                    <span class="status-pill status-completed">● Completed</span>
+                {% else %}
+                    <span class="status-pill status-archived">● {{ case.status }}</span>
+                {% endif %}
+            </div>
+            <h1 style="font-size: 20px; font-weight: 700; color: var(--text-primary);">
+                {{ case.title }}
+            </h1>
+        </div>
+
+        <div class="card-actions">
+            <a href="{{ url_for('new_evidence') }}?case_id={{ case.case_id }}" class="btn btn-primary">
+                <span>➕</span> Log Evidence to Case
+            </a>
+            <a href="{{ url_for('measurement_workspace') }}?case_id={{ case.case_id }}" class="btn btn-secondary">
+                <span>📐</span> Open Measurement Lab
+            </a>
+        </div>
+    </div>
+
+    <!-- Metadata Grid -->
+    <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
+        <div class="stat-card">
+            <div class="stat-content">
+                <div class="stat-label">Agency Reference</div>
+                <div style="font-family: var(--font-mono); font-size: 14px; font-weight: 600; color: var(--text-primary);">
+                    {{ case.reference_no }}
+                </div>
+            </div>
+        </div>
+
+        <div class="stat-card">
+            <div class="stat-content">
+                <div class="stat-label">Lead Examiner</div>
+                <div style="font-size: 14px; font-weight: 600; color: var(--text-primary);">
+                    {{ case.examiner }}
+                </div>
+            </div>
+        </div>
+
+        <div class="stat-card">
+            <div class="stat-content">
+                <div class="stat-label">Examination Date</div>
+                <div style="font-size: 14px; font-weight: 600; color: var(--text-primary);">
+                    {{ case.examination_date }}
+                </div>
+            </div>
+        </div>
+
+        <div class="stat-card">
+            <div class="stat-content">
+                <div class="stat-label">Case Created Timestamp</div>
+                <div style="font-size: 12px; color: var(--text-secondary);">
+                    {{ case.created_at }}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {% if case.description %}
+        <div style="margin-top: 16px; padding: 14px; background-color: var(--bg-surface); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+            <div style="font-size: 11px; text-transform: uppercase; font-weight: 600; color: var(--text-muted); margin-bottom: 4px;">
+                Scene Examination Notes &amp; Substrate Description:
+            </div>
+            <p style="color: var(--text-secondary); font-size: 13.5px; white-space: pre-wrap;">{{ case.description }}</p>
+        </div>
+    {% endif %}
+
+    <!-- Status Updater Form -->
+    <form method="POST" action="{{ url_for('update_case_status_route', case_id=case.case_id) }}" style="margin-top: 20px; display: flex; align-items: center; gap: 12px;">
+        <span style="font-size: 12.5px; color: var(--text-muted); font-weight: 600;">Update Case Status:</span>
+        <select name="status" class="form-control" style="width: auto; padding: 6px 12px; font-size: 13px;">
+            <option value="Active" {% if case.status == 'Active' %}selected{% endif %}>Active</option>
+            <option value="Under Review" {% if case.status == 'Under Review' %}selected{% endif %}>Under Review</option>
+            <option value="Completed" {% if case.status == 'Completed' %}selected{% endif %}>Completed</option>
+            <option value="Archived" {% if case.status == 'Archived' %}selected{% endif %}>Archived</option>
+        </select>
+        <button type="submit" class="btn btn-secondary btn-sm">Save Status</button>
+    </form>
+</div>
+
+<!-- Attached Evidence Section -->
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">
+            <span>🔬</span> Evidence Items Associated with this Case
+            <span class="badge" style="background-color: var(--bg-surface); color: var(--text-muted);">{{ evidence_items|length }}</span>
+        </h2>
+        <a href="{{ url_for('new_evidence') }}?case_id={{ case.case_id }}" class="btn btn-primary btn-sm">
+            <span>➕</span> Log New Evidence Item
+        </a>
+    </div>
+
+    {% if evidence_items %}
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Evidence ID</th>
+                        <th>Pattern / Evidence Type</th>
+                        <th>Target Surface / Location</th>
+                        <th>Description &amp; Observations</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for ev in evidence_items %}
+                        <tr>
+                            <td>
+                                <span class="case-id-badge">{{ ev.evidence_id }}</span>
+                            </td>
+                            <td>
+                                <span class="badge" style="background-color: var(--crimson-soft); color: var(--crimson);">
+                                    {{ ev.evidence_type }}
+                                </span>
+                            </td>
+                            <td>{{ ev.location_surface if ev.location_surface else 'Unspecified' }}</td>
+                            <td>
+                                <strong style="color: var(--text-primary); display: block;">{{ ev.description }}</strong>
+                                {% if ev.notes %}
+                                    <span style="font-size: 11.5px; color: var(--text-muted);">{{ ev.notes }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if ev.status == 'Logged' %}
+                                    <span class="status-pill status-review">● Logged</span>
+                                {% elif ev.status == 'Pending Analysis' %}
+                                    <span class="status-pill status-pending">● Pending Analysis</span>
+                                {% elif ev.status == 'Analyzed' %}
+                                    <span class="status-pill status-completed">● Analyzed</span>
+                                {% else %}
+                                    <span class="status-pill status-archived">● {{ ev.status }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <a href="{{ url_for('measurement_workspace') }}?case_id={{ case.case_id }}&evidence_id={{ ev.evidence_id }}" class="btn btn-secondary btn-sm" title="Analyze stain in workspace">
+                                    Analyze Stain
+                                </a>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div style="text-align: center; padding: 30px; color: var(--text-muted);">
+            <p>No physical evidence has been logged for this case yet.</p>
+            <a href="{{ url_for('new_evidence') }}?case_id={{ case.case_id }}" class="btn btn-primary btn-sm" style="margin-top: 10px;">
+                Log First Evidence Item
+            </a>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}
+

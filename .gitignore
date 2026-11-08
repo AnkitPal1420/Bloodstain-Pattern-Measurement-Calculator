@@ -26,9 +26,20 @@ wheels/
 
 # Virtual environments
 .venv/
+.venv314/
 venv/
 ENV/
 env/
+
+# SQLite databases & WAL logs
+*.db
+*.db-wal
+*.db-shm
+*.sqlite3
+
+# Uploaded evidence images
+uploads/*
+!uploads/.gitkeep
 
 # Pytest / coverage caches
 .pytest_cache/

@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+
+{% block title %}Log Evidence{% endblock %}
+{% block breadcrumb %}Evidence Vault / Log Physical Evidence{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width: 800px; margin: 0 auto;">
+    <div class="card-header">
+        <h1 class="card-title">
+            <span>🏷️</span> Log Physical Bloodstain Evidence Item
+        </h1>
+        <a href="{{ url_for('evidence_list') }}" class="btn btn-secondary btn-sm">← Back to Vault</a>
+    </div>
+
+    <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 20px;">
+        Record an individual bloodstain, spatter group, or cast-off pattern linked to an active case file.
+    </p>
+
+    <form method="POST" action="{{ url_for('new_evidence') }}">
+        <div class="form-grid">
+            <div class="form-group">
+                <label for="case_id">Associated Forensic Case:</label>
+                <select name="case_id" id="case_id" class="form-control" required>
+                    {% for c in cases %}
+                        <option value="{{ c.case_id }}" {% if selected_case == c.case_id %}selected{% endif %}>
+                            {{ c.case_id }} — {{ c.title }}
+                        </option>
+                    {% endfor %}
+                </select>
+                <p class="form-hint">Select the investigation case this evidence belongs to.</p>
+            </div>
+
+            <div class="form-group">
+                <label for="evidence_type">Bloodstain Pattern Classification:</label>
+                <select name="evidence_type" id="evidence_type" class="form-control" required>
+                    <option value="Impact Spatter">Impact Spatter (Blunt/Sharp Force)</option>
+                    <option value="Cast-off Pattern">Cast-off Pattern (Swung Weapon)</option>
+                    <option value="Transfer Pattern">Transfer Pattern / Contact Swipe</option>
+                    <option value="Arterial Spray">Arterial Spray / Gush</option>
+                    <option value="Void Pattern">Void / Shadow Pattern</option>
+                    <option value="Drip Trail">Drip Trail / Passive Droplet</option>
+                    <option value="Controlled Reference">Controlled Reference / Calibration Drop</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="description">Evidence Item Description:</label>
+            <input 
+                type="text" 
+                class="form-control" 
+                id="description" 
+                name="description" 
+                placeholder="e.g. Cluster of 12 elliptical spatter stains on north wall, 1.4m above finished floor" 
+                required
+            >
+            <p class="form-hint">Concise description of the observed stain or spatter cluster.</p>
+        </div>
+
+        <div class="form-grid">
+            <div class="form-group">
+                <label for="location_surface">Target Surface Substrate &amp; Texture:</label>
+                <input 
+                    type="text" 
+                    class="form-control" 
+                    id="location_surface" 
+                    name="location_surface" 
+                    placeholder="e.g. Smooth painted drywall, Non-porous ceramic tile, Carpet"
+                >
+                <p class="form-hint">Substrate texture affects droplet absorption and rim scalloping.</p>
+            </div>
+
+            <div class="form-group">
+                <label for="status">Evidence Workflow Status:</label>
+                <select name="status" id="status" class="form-control">
+                    <option value="Logged" selected>Logged (Awaiting Processing)</option>
+                    <option value="Pending Analysis">Pending Analysis</option>
+                    <option value="Analyzed">Analyzed (Measurements Recorded)</option>
+                    <option value="Archived">Archived</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="notes">Chain of Custody &amp; Forensic Observations:</label>
+            <textarea 
+                class="form-control" 
+                id="notes" 
+                name="notes" 
+                placeholder="Scale bar placed, oblique lighting applied, DNA swabbing documentation, directionality tail observations..."
+            ></textarea>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px; border-top: 1px solid var(--border-subtle); padding-top: 18px;">
+            <a href="{{ url_for('evidence_list') }}" class="btn btn-secondary">Cancel</a>
+            <button type="submit" class="btn btn-primary">Save Evidence Record</button>
+        </div>
+    </form>
+</div>
+{% endblock %}
+

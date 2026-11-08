@@ -1,0 +1,268 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard &amp; Overview{% endblock %}
+{% block breadcrumb %}Main Laboratory Dashboard{% endblock %}
+
+{% block content %}
+<!-- Welcome & Laboratory Overview Header -->
+<div class="card" style="background: linear-gradient(135deg, #182238 0%, #111a2f 100%); border-left: 4px solid var(--crimson);">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px;">
+        <div>
+            <span class="badge" style="background-color: var(--crimson-soft); color: var(--crimson); border: 1px solid rgba(225,29,72,0.3); font-weight: 700;">
+                Milestone 2 • Operational Lab Interface
+            </span>
+            <h1 style="font-size: 22px; font-weight: 700; margin: 8px 0 4px; color: var(--text-primary);">
+                🩸 Bloodstain Pattern Measurement Calculator
+            </h1>
+            <p style="color: var(--text-secondary); max-width: 650px; font-size: 13.5px;">
+                Welcome to the BPA Forensic Examination Workspace. Manage chain of custody, log physical spatter evidence, and model droplet impact geometry using verified trigonometric approximations.
+            </p>
+        </div>
+        <div style="text-align: right;">
+            <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">System Session</div>
+            <div style="font-family: var(--font-mono); font-size: 13px; color: var(--text-primary); font-weight: 600;">
+                ACTIVE • LOCALHOST
+            </div>
+            <div style="font-size: 11.5px; color: var(--status-active); margin-top: 4px;">● Database Connected</div>
+        </div>
+    </div>
+</div>
+
+<!-- Actual Database Metrics Grid -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-icon-wrapper" style="color: var(--crimson);">📁</div>
+        <div class="stat-content">
+            <div class="stat-label">Total Cases</div>
+            <div class="stat-value">{{ stats.total_cases }}</div>
+        </div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-icon-wrapper" style="color: var(--status-active);">⚡</div>
+        <div class="stat-content">
+            <div class="stat-label">Active Investigations</div>
+            <div class="stat-value">{{ stats.active_cases }}</div>
+        </div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-icon-wrapper" style="color: var(--status-review);">🔍</div>
+        <div class="stat-content">
+            <div class="stat-label">Under Review</div>
+            <div class="stat-value">{{ stats.under_review_cases }}</div>
+        </div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-icon-wrapper" style="color: var(--status-completed);">✓</div>
+        <div class="stat-content">
+            <div class="stat-label">Completed Cases</div>
+            <div class="stat-value">{{ stats.completed_cases }}</div>
+        </div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-icon-wrapper" style="color: #c084fc;">🔬</div>
+        <div class="stat-content">
+            <div class="stat-label">Evidence Items Logged</div>
+            <div class="stat-value">{{ stats.total_evidence }}</div>
+        </div>
+    </div>
+</div>
+
+<!-- Quick Actions Bar -->
+<div class="quick-actions-bar">
+    <a href="{{ url_for('new_case') }}" class="btn btn-primary">
+        <span>➕</span> Create New Case
+    </a>
+    <a href="{{ url_for('new_evidence') }}" class="btn btn-secondary">
+        <span>🏷️</span> Log Evidence
+    </a>
+    <a href="{{ url_for('cases_list') }}" class="btn btn-secondary">
+        <span>📁</span> Open Case Registry
+    </a>
+    <a href="{{ url_for('measurement_workspace') }}" class="btn btn-secondary">
+        <span>📐</span> Dedicated Measurement Lab
+    </a>
+    <a href="{{ url_for('results_dashboard') }}" class="btn btn-secondary">
+        <span>📈</span> View Results Dashboard
+    </a>
+</div>
+
+<!-- Main Two-Column Layout: Recent Cases & Quick Measurement Engine -->
+<div class="grid" style="display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 24px;">
+    <!-- Left Column: Recent Case Activity -->
+    <div>
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <span>📋</span> Recent Forensic Case Activity
+                </h2>
+                <a href="{{ url_for('cases_list') }}" class="btn btn-secondary btn-sm">View All Cases</a>
+            </div>
+
+            {% if recent_cases %}
+                <div class="table-responsive">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Case ID</th>
+                                <th>Title / Crime Scene</th>
+                                <th>Examiner</th>
+                                <th>Status</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for c in recent_cases %}
+                                <tr>
+                                    <td>
+                                        <span class="case-id-badge">{{ c.case_id }}</span>
+                                    </td>
+                                    <td>
+                                        <strong style="color: var(--text-primary); display: block;">{{ c.title }}</strong>
+                                        <span style="font-size: 11.5px; color: var(--text-muted);">Ref: {{ c.reference_no }}</span>
+                                    </td>
+                                    <td>{{ c.examiner }}</td>
+                                    <td>
+                                        {% if c.status == 'Active' %}
+                                            <span class="status-pill status-active">● Active</span>
+                                        {% elif c.status == 'Under Review' %}
+                                            <span class="status-pill status-review">● In Review</span>
+                                        {% elif c.status == 'Completed' %}
+                                            <span class="status-pill status-completed">● Completed</span>
+                                        {% else %}
+                                            <span class="status-pill status-archived">● {{ c.status }}</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <a href="{{ url_for('case_detail', case_id=c.case_id) }}" class="btn btn-secondary btn-sm">Inspect</a>
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <p style="text-align: center; color: var(--text-muted); padding: 20px;">No cases found in registry.</p>
+            {% endif %}
+        </div>
+
+        <!-- Scientific Principles Card -->
+        <div class="card">
+            <h2 class="card-title">🔬 Scientific Principles & Geometric Foundation</h2>
+            <p style="color: var(--text-secondary); margin-bottom: 8px;">
+                When an airborne spherical blood droplet strikes an inclined target surface, forward momentum elongates the deposit along the direction of travel, creating an <strong>elliptical bloodstain</strong>.
+            </p>
+            <div class="formula-box">
+                sin(&alpha;) = Opposite / Hypotenuse = Width / Length<br>
+                &alpha; = arcsin(Width / Length)
+            </div>
+            <p class="form-hint">
+                • <strong>Width (W)</strong>: Minor axis (corresponds to initial spherical droplet diameter).<br>
+                • <strong>Length (L)</strong>: Major axis (corresponds to elongated impact travel, excluding spines and satellite spatter).<br>
+                • <em>Physical Boundary:</em> The minor axis can never exceed the major axis (W &le; L).
+            </p>
+        </div>
+    </div>
+
+    <!-- Right Column: Quick Trigonometric Calculator -->
+    <div>
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <span>📐</span> Quick Impact Angle Calculator
+                </h2>
+                <span class="badge" style="font-size: 10px; background-color: var(--crimson-soft); color: var(--crimson);">Trigonometric Engine</span>
+            </div>
+
+            <p class="form-hint" style="margin-bottom: 10px;">Select standard geometric preset or enter custom dimensions:</p>
+            <div class="preset-group">
+                <button type="button" class="btn-preset" data-width="5.0" data-length="10.0">30° Oblique</button>
+                <button type="button" class="btn-preset" data-width="10.0" data-length="10.0">90° Perpendicular</button>
+                <button type="button" class="btn-preset" data-width="7.07" data-length="10.0">45° Strike</button>
+                <button type="button" class="btn-preset" data-width="2.59" data-length="10.0">15° Glancing</button>
+            </div>
+
+            <form method="POST" action="{{ url_for('index') }}" id="measurement-form">
+                <div class="form-group">
+                    <label for="width">Minor Axis — Width (W) in mm:</label>
+                    <input 
+                        type="number" 
+                        step="any" 
+                        class="form-control" 
+                        id="width" 
+                        name="width" 
+                        value="{{ width if width is not none else '5.0' }}" 
+                        required
+                    >
+                    <p class="form-hint">Narrowest dimension across ellipse body.</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="length">Major Axis — Length (L) in mm:</label>
+                    <input 
+                        type="number" 
+                        step="any" 
+                        class="form-control" 
+                        id="length" 
+                        name="length" 
+                        value="{{ length if length is not none else '10.0' }}" 
+                        required
+                    >
+                    <p class="form-hint">Longest dimension along travel axis (excluding tail spines).</p>
+                </div>
+
+                <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 8px;">
+                    📐 Calculate Impact Angle
+                </button>
+            </form>
+
+            <!-- Results & Error Container -->
+            <div style="margin-top: 20px;">
+                {% if error %}
+                    <div class="alert alert-danger" role="alert">
+                        <strong>❌ Validation Error:</strong> {{ error }}
+                    </div>
+                {% endif %}
+
+                {% if result %}
+                    <div class="calc-metrics-row">
+                        <div class="calc-metric-card">
+                            <div class="label">Impact Angle (&alpha;)</div>
+                            <div class="val">{{ "%.2f"|format(result.angle_degrees) }}°</div>
+                        </div>
+                        <div class="calc-metric-card">
+                            <div class="label">Ratio (W / L)</div>
+                            <div class="val">{{ "%.4f"|format(result.ratio) }}</div>
+                        </div>
+                        <div class="calc-metric-card">
+                            <div class="label">Radians</div>
+                            <div class="val">{{ "%.4f"|format(result.angle_radians) }}</div>
+                        </div>
+                    </div>
+
+                    {% if result.is_perpendicular %}
+                        <div class="alert alert-info">
+                            <strong>Circular Stain:</strong> {{ result.interpretation }}
+                        </div>
+                    {% elif result.angle_degrees < 30.0 %}
+                        <div class="alert alert-warning">
+                            <strong>Acute Incline:</strong> {{ result.interpretation }}
+                        </div>
+                    {% else %}
+                        <div class="alert alert-info">
+                            <strong>Oblique Strike:</strong> {{ result.interpretation }}
+                        </div>
+                    {% endif %}
+
+                    <div class="alert alert-warning" style="font-size: 11.5px;">
+                        <strong>ℹ️ Forensic Notice:</strong> {{ result.disclaimer }}
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

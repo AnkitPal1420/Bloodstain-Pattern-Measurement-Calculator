@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+
+{% block title %}Results &amp; Trajectory Dashboard{% endblock %}
+{% block breadcrumb %}Forensic Workspaces / Results Dashboard{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <div>
+            <h1 class="card-title">
+                <span>📈</span> Forensic Results &amp; Trajectory Analysis Dashboard
+            </h1>
+            <p style="color: var(--text-muted); font-size: 13px; margin-top: 4px;">
+                Comprehensive overview of calculated bloodstain geometries, recorded trajectories, and analytical reconstruction stages.
+            </p>
+        </div>
+        <div>
+            <a href="{{ url_for('measurement_workspace') }}" class="btn btn-primary">
+                <span>📐</span> Open Measurement Lab
+            </a>
+        </div>
+    </div>
+</div>
+
+<!-- Actual Recorded Measurements Table -->
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">
+            <span>📋</span> Verified Bloodstain Measurement History
+        </h2>
+        <span class="badge" style="background-color: var(--status-active-bg); color: var(--status-active); border: 1px solid rgba(16,185,129,0.3);">
+            {{ measurements|length }} Verified Record(s)
+        </span>
+    </div>
+
+    {% if measurements %}
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Stain Label</th>
+                        <th>Case Ref</th>
+                        <th>Width (W)</th>
+                        <th>Length (L)</th>
+                        <th>Sine Ratio (W/L)</th>
+                        <th>Impact Angle (&alpha;)</th>
+                        <th>Radians</th>
+                        <th>Calibration &amp; Optical Source</th>
+                        <th>Trajectory Interpretation</th>
+                        <th>Recorded Date</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for m in measurements %}
+                        <tr>
+                            <td>
+                                <strong style="color: var(--text-primary); font-family: var(--font-mono);">
+                                    {{ m.stain_label }}
+                                </strong>
+                            </td>
+                            <td>
+                                {% if m.case_id %}
+                                    <span class="case-id-badge">{{ m.case_id }}</span>
+                                {% else %}
+                                    <span style="color: var(--text-muted); font-size: 11px;">Standalone</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ "%.2f"|format(m.width) }} {% if m.calibration_status and 'Uncalibrated Optical' in m.calibration_status %}px{% else %}mm{% endif %}</td>
+                            <td>{{ "%.2f"|format(m.length) }} {% if m.calibration_status and 'Uncalibrated Optical' in m.calibration_status %}px{% else %}mm{% endif %}</td>
+                            <td><code>{{ "%.4f"|format(m.ratio) }}</code></td>
+                            <td>
+                                <strong style="color: var(--crimson); font-size: 14px;">
+                                    {{ "%.2f"|format(m.angle_degrees) }}°
+                                </strong>
+                            </td>
+                            <td>{{ "%.4f"|format(m.angle_radians) }} rad</td>
+                            <td style="font-size: 11.5px;">
+                                <span style="color: var(--text-secondary); display: block;">{{ m.calibration_status if m.calibration_status else 'Uncalibrated (Manual)' }}</span>
+                                {% if m.image_id %}
+                                    <a href="{{ url_for('measurement_workspace', image_id=m.image_id, case_id=m.case_id or '') }}" style="color: #38bdf8; font-family: var(--font-mono); font-size: 11px; text-decoration: none;">
+                                        🔍 {{ m.image_id }}
+                                    </a>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if m.is_perpendicular %}
+                                    <span class="status-pill status-completed">Circular (90°)</span>
+                                {% elif m.angle_degrees < 30.0 %}
+                                    <span class="status-pill status-review">Acute Glancing</span>
+                                {% else %}
+                                    <span class="status-pill status-active">Oblique</span>
+                                {% endif %}
+                            </td>
+                            <td style="font-size: 11.5px; color: var(--text-muted);">
+                                {{ m.created_at[:16] if m.created_at else '' }}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div style="text-align: center; padding: 30px; color: var(--text-muted);">
+            <p>No measurement records found. Perform calculations in the Measurement Lab to record data.</p>
+        </div>
+    {% endif %}
+</div>
+
+<!-- Trajectory Reconstruction Placeholders (Clearly Separated & Labeled) -->
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">
+            <span>🧭</span> Advanced Trajectory &amp; Spatial Origin Reconstructions
+        </h2>
+        <span class="status-pill status-pending">● Reserved for Milestones 3 &amp; 4</span>
+    </div>
+
+    <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 20px;">
+        The sections below represent multi-stain trajectory extrapolation modules. These require calibrated optical coordinates and are scheduled for implementation in subsequent project phases.
+    </p>
+
+    <div class="grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px;">
+        <!-- 2D Area of Convergence Placeholder -->
+        <div class="feature-placeholder-card">
+            <span class="badge" style="background-color: var(--status-review-bg); color: var(--status-review); border: 1px solid rgba(245,158,11,0.3);">
+                Phase 3 / 4 Milestone
+            </span>
+            <h4>📐 2D Area of Convergence</h4>
+            <p style="margin: 8px 0 12px;">
+                Intersection of directional long-axis vectors projected backwards across the target plane.
+            </p>
+            <div style="padding: 10px; background-color: var(--bg-main); border-radius: var(--radius-sm); font-size: 11px; color: var(--text-muted); border: 1px solid var(--border-subtle);">
+                Status: Pending multiple-stain vector projection algorithm.
+            </div>
+        </div>
+
+        <!-- 3D Area of Origin Placeholder -->
+        <div class="feature-placeholder-card">
+            <span class="badge" style="background-color: rgba(192,132,252,0.15); color: #c084fc; border: 1px solid rgba(192,132,252,0.3);">
+                Phase 4 Milestone
+            </span>
+            <h4>📍 3D Spatial Origin Reconstruction</h4>
+            <p style="margin: 8px 0 12px;">
+                Triangulation of height above target surface: Z = D &times; tan(&alpha;) where D is distance to convergence point.
+            </p>
+            <div style="padding: 10px; background-color: var(--bg-main); border-radius: var(--radius-sm); font-size: 11px; color: var(--text-muted); border: 1px solid var(--border-subtle);">
+                Status: Pending 3D spatial coordinate solver and stringing model.
+            </div>
+        </div>
+
+        <!-- Annotated Evidence Overlay Placeholder -->
+        <div class="feature-placeholder-card">
+            <span class="badge" style="background-color: rgba(56,189,248,0.15); color: #38bdf8; border: 1px solid rgba(56,189,248,0.3);">
+                Phase 3 Milestone
+            </span>
+            <h4>🔍 Annotated Computer-Vision Overlay</h4>
+            <p style="margin: 8px 0 12px;">
+                Synthetic direct least-squares ellipse contour and directional arrow overlaid on raw photographic evidence.
+            </p>
+            <div style="padding: 10px; background-color: var(--bg-main); border-radius: var(--radius-sm); font-size: 11px; color: var(--text-muted); border: 1px solid var(--border-subtle);">
+                Status: Scheduled for OpenCV digital image processing pipeline.
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+

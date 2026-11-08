@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+
+{% block title %}Evidence Vault{% endblock %}
+{% block breadcrumb %}Forensic Evidence Vault{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <div>
+            <h1 class="card-title">
+                <span>🔬</span> Physical Bloodstain Evidence Registry
+            </h1>
+            <p style="color: var(--text-muted); font-size: 13px; margin-top: 4px;">
+                Chain of custody logs and surface spatter items recorded across forensic cases.
+            </p>
+        </div>
+        <div>
+            <a href="{{ url_for('new_evidence') }}" class="btn btn-primary">
+                <span>🏷️</span> Log New Evidence
+            </a>
+        </div>
+    </div>
+
+    <!-- Search & Filter Bar -->
+    <form method="GET" action="{{ url_for('evidence_list') }}" class="filter-bar">
+        <div class="filter-search">
+            <input 
+                type="text" 
+                name="search" 
+                class="form-control" 
+                placeholder="Search by Evidence ID, Description, or Surface..."
+                value="{{ search_query if search_query else '' }}"
+            >
+        </div>
+        <div>
+            <select name="status" class="form-control" onchange="this.form.submit()">
+                <option value="All" {% if not status_filter or status_filter == 'All' %}selected{% endif %}>All Statuses</option>
+                <option value="Logged" {% if status_filter == 'Logged' %}selected{% endif %}>Logged</option>
+                <option value="Pending Analysis" {% if status_filter == 'Pending Analysis' %}selected{% endif %}>Pending Analysis</option>
+                <option value="Analyzed" {% if status_filter == 'Analyzed' %}selected{% endif %}>Analyzed</option>
+                <option value="Archived" {% if status_filter == 'Archived' %}selected{% endif %}>Archived</option>
+            </select>
+        </div>
+        <div>
+            <select name="case_id" class="form-control" onchange="this.form.submit()">
+                <option value="">All Associated Cases</option>
+                {% for c in all_cases %}
+                    <option value="{{ c.case_id }}" {% if selected_case == c.case_id %}selected{% endif %}>
+                        {{ c.case_id }} — {{ c.title[:30] }}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+        <button type="submit" class="btn btn-secondary">Filter</button>
+        {% if search_query or (status_filter and status_filter != 'All') or selected_case %}
+            <a href="{{ url_for('evidence_list') }}" class="btn btn-secondary btn-sm" style="color: var(--crimson);">Clear Filters</a>
+        {% endif %}
+    </form>
+
+    <!-- Evidence Data Table -->
+    {% if evidence_items %}
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Evidence ID</th>
+                        <th>Associated Case</th>
+                        <th>Pattern Type</th>
+                        <th>Target Substrate / Location</th>
+                        <th>Evidence Description</th>
+                        <th>Status</th>
+                        <th>Logged Date</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for ev in evidence_items %}
+                        <tr>
+                            <td>
+                                <span class="case-id-badge" style="color: var(--crimson);">{{ ev.evidence_id }}</span>
+                            </td>
+                            <td>
+                                <a href="{{ url_for('case_detail', case_id=ev.case_id) }}" style="color: var(--text-primary); text-decoration: none; font-family: var(--font-mono); font-weight: 600;">
+                                    {{ ev.case_id }}
+                                </a>
+                            </td>
+                            <td>
+                                <span class="badge" style="background-color: var(--crimson-soft); color: var(--crimson);">
+                                    {{ ev.evidence_type }}
+                                </span>
+                            </td>
+                            <td>{{ ev.location_surface if ev.location_surface else 'Unspecified' }}</td>
+                            <td>
+                                <strong style="color: var(--text-primary); display: block;">{{ ev.description }}</strong>
+                                {% if ev.notes %}
+                                    <span style="font-size: 11.5px; color: var(--text-muted);">{{ ev.notes }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if ev.status == 'Logged' %}
+                                    <span class="status-pill status-review">● Logged</span>
+                                {% elif ev.status == 'Pending Analysis' %}
+                                    <span class="status-pill status-pending">● Pending Analysis</span>
+                                {% elif ev.status == 'Analyzed' %}
+                                    <span class="status-pill status-completed">● Analyzed</span>
+                                {% else %}
+                                    <span class="status-pill status-archived">● {{ ev.status }}</span>
+                                {% endif %}
+                            </td>
+                            <td style="font-size: 12px; color: var(--text-muted);">
+                                {{ ev.created_at[:10] if ev.created_at else '' }}
+                            </td>
+                            <td>
+                                <a href="{{ url_for('measurement_workspace') }}?case_id={{ ev.case_id }}&evidence_id={{ ev.evidence_id }}" class="btn btn-primary btn-sm">
+                                    Analyze
+                                </a>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div style="text-align: center; padding: 40px 20px; color: var(--text-muted);">
+            <div style="font-size: 36px; margin-bottom: 8px;">🔬</div>
+            <h3>No Evidence Records Found</h3>
+            <p style="margin: 8px 0 16px;">Log new spatter evidence or adjust your search filter criteria.</p>
+            <a href="{{ url_for('new_evidence') }}" class="btn btn-primary">Log First Evidence Record</a>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}
+

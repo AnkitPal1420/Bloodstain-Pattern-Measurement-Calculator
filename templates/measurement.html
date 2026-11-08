@@ -1,0 +1,628 @@
+{% extends "base.html" %}
+
+{% block title %}Measurement Lab{% endblock %}
+{% block breadcrumb %}Forensic Workspaces / Measurement Lab{% endblock %}
+
+{% block content %}
+<!-- Workspace Context Header -->
+<div class="card" style="margin-bottom: 20px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px;">
+        <div>
+            <h1 class="card-title" style="font-size: 18px;">
+                <span>📐</span> Bloodstain Measurement &amp; Ellipse Geometry Lab
+            </h1>
+            <p style="color: var(--text-muted); font-size: 13px; margin-top: 4px;">
+                Determine droplet impact angle (&alpha;) via OpenCV least-squares ellipse fitting (<code>cv2.fitEllipse</code>) &amp; trigonometric geometry: &alpha; = arcsin(W / L).
+            </p>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <span class="badge" style="background-color: rgba(16,185,129,0.15); color: var(--status-active); border: 1px solid rgba(16,185,129,0.3);">
+                Phase 3 OpenCV Pipeline Active
+            </span>
+            <span class="badge" style="background-color: rgba(56,189,248,0.15); color: #38bdf8; border: 1px solid rgba(56,189,248,0.3);">
+                Trig Engine v1.0
+            </span>
+        </div>
+    </div>
+</div>
+
+<!-- Subphase 3.1: Optical Evidence Image Acquisition Bar -->
+<div class="card" style="margin-bottom: 20px;">
+    <div class="card-header" style="margin-bottom: 14px; padding-bottom: 10px;">
+        <h2 class="card-title" style="font-size: 15px;">
+            <span>📤</span> Evidence Image Acquisition &amp; Optical Staging
+        </h2>
+        <span class="badge" style="background-color: var(--bg-surface); color: var(--text-muted); font-size: 11px;">
+            Accepted: .JPG, .JPEG, .PNG (Max 16 MB)
+        </span>
+    </div>
+
+    <div style="display: grid; grid-template-columns: 1.4fr 1fr; gap: 18px; align-items: start;">
+        <!-- File Upload Form -->
+        <form method="POST" action="{{ url_for('upload_evidence_image') }}" enctype="multipart/form-data" style="display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end;">
+            <input type="hidden" name="case_id" value="{{ selected_case }}">
+            <input type="hidden" name="evidence_id" value="{{ selected_evidence }}">
+            <div style="flex: 1; min-width: 210px;">
+                <label for="image_file" style="display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px;">
+                    Upload Bloodstain Evidence Photograph:
+                </label>
+                <input type="file" name="image_file" id="image_file" accept=".jpg,.jpeg,.png" class="form-control" style="padding: 7px 10px; font-size: 12.5px;" required>
+            </div>
+            <button type="submit" class="btn btn-primary">
+                <span>📷</span> Upload &amp; Run Vision Pipeline
+            </button>
+        </form>
+
+        <!-- Laboratory Reference Samples & Existing Image Selector -->
+        <div>
+            <div style="font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px;">
+                Quick-Load Controlled Laboratory Reference Samples:
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                <form method="POST" action="{{ url_for('upload_evidence_image') }}" style="display: inline;">
+                    <input type="hidden" name="case_id" value="{{ selected_case }}">
+                    <input type="hidden" name="evidence_id" value="{{ selected_evidence }}">
+                    <input type="hidden" name="sample_name" value="sample_30deg_oblique.png">
+                    <button type="submit" class="btn btn-secondary btn-sm">🩸 30° Oblique Drop</button>
+                </form>
+                <form method="POST" action="{{ url_for('upload_evidence_image') }}" style="display: inline;">
+                    <input type="hidden" name="case_id" value="{{ selected_case }}">
+                    <input type="hidden" name="evidence_id" value="{{ selected_evidence }}">
+                    <input type="hidden" name="sample_name" value="sample_45deg_calibrated.png">
+                    <button type="submit" class="btn btn-secondary btn-sm">📏 45° Drop + Scale Bar</button>
+                </form>
+                <form method="POST" action="{{ url_for('upload_evidence_image') }}" style="display: inline;">
+                    <input type="hidden" name="case_id" value="{{ selected_case }}">
+                    <input type="hidden" name="evidence_id" value="{{ selected_evidence }}">
+                    <input type="hidden" name="sample_name" value="sample_90deg_circular.png">
+                    <button type="submit" class="btn btn-secondary btn-sm">⭕ 90° Circular Drop</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    {% if recent_images %}
+        <div style="margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-subtle); display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <span style="font-size: 11.5px; color: var(--text-muted); font-weight: 600;">Recent Registered Evidence Images:</span>
+            {% for img in recent_images[:6] %}
+                <a href="{{ url_for('measurement_workspace', image_id=img.image_id, case_id=img.case_id or selected_case, evidence_id=img.evidence_id or selected_evidence) }}"
+                   class="badge"
+                   style="text-decoration: none; padding: 4px 9px; border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 11px; {% if image_id == img.image_id %}background-color: var(--crimson); color: #fff;{% else %}background-color: var(--bg-surface); color: var(--text-secondary); border: 1px solid var(--border-subtle);{% endif %}">
+                    {{ img.image_id }} ({{ img.original_filename[:18] }})
+                </a>
+            {% endfor %}
+        </div>
+    {% endif %}
+</div>
+
+<div class="workspace-grid">
+    <!-- Left Column: Optical Inspection, Preprocessing, Segmentation & Calibration -->
+    <div>
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <span>📷</span> Optical Inspection &amp; Ellipse Detection
+                </h2>
+                {% if vision_data %}
+                    <span class="status-pill status-active">● OpenCV Ellipse Fitted</span>
+                {% else %}
+                    <span class="status-pill status-review">● Ready for Acquisition</span>
+                {% endif %}
+            </div>
+
+            {% if vision_error %}
+                <div class="alert alert-danger" role="alert">
+                    <strong>⚠️ Optical Pipeline Alert:</strong> {{ vision_error }}
+                </div>
+            {% endif %}
+
+            {% if vision_data and processed_views %}
+                <!-- Stage View Selector Tabs (Subphase 3.2 & 3.4) -->
+                <div class="cv-tabs" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px;">
+                    <button type="button" class="btn btn-secondary btn-sm cv-tab-btn active" data-target="view-overlay">
+                        🎯 Ellipse &amp; Axes Overlay
+                    </button>
+                    <button type="button" class="btn btn-secondary btn-sm cv-tab-btn" data-target="view-original">
+                        📷 Original ({{ active_image.width_px }}&times;{{ active_image.height_px }})
+                    </button>
+                    <button type="button" class="btn btn-secondary btn-sm cv-tab-btn" data-target="view-grayscale">
+                        🌫️ Grayscale
+                    </button>
+                    <button type="button" class="btn btn-secondary btn-sm cv-tab-btn" data-target="view-threshold">
+                        🌓 {{ threshold_method|upper }} Binary
+                    </button>
+                    <button type="button" class="btn btn-secondary btn-sm cv-tab-btn" data-target="view-morphed">
+                        🧬 Morphology Mask
+                    </button>
+                    <button type="button" class="btn btn-secondary btn-sm cv-tab-btn" data-target="view-compare">
+                        ⚖️ Otsu vs Adaptive
+                    </button>
+                </div>
+
+                <!-- Interactive Optical Stage Views -->
+                <div class="cv-stage-container" style="background-color: #070b12; border: 1px solid var(--border-strong); border-radius: var(--radius-md); padding: 12px; text-align: center; position: relative;">
+                    <div class="placeholder-badge" style="display: none;">Computer Vision Optical Station</div>
+
+                    <!-- 1. Annotated Ellipse Overlay (with interactive click calibration) -->
+                    <div id="view-overlay" class="cv-stage-pane">
+                        <div style="position: relative; display: inline-block; max-width: 100%;">
+                            <img id="cv-interactive-img"
+                                 src="{{ url_for('serve_processed_upload', filename=processed_views.overlay) }}?t={{ range(1000, 9999)|random }}"
+                                 alt="Fitted Bloodstain Ellipse Overlay"
+                                 data-natural-width="{{ active_image.width_px }}"
+                                 data-natural-height="{{ active_image.height_px }}"
+                                 style="max-width: 100%; max-height: 380px; border-radius: var(--radius-sm); cursor: crosshair; display: block; margin: 0 auto;">
+                        </div>
+                        <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 8px;">
+                            <span style="color: #4ade80;">■ Outer Contour</span> &nbsp;|&nbsp;
+                            <span style="color: #f43f5e;">■ Least-Squares Ellipse</span> &nbsp;|&nbsp;
+                            <span style="color: #22d3ee;">■ Minor Axis (W)</span> &nbsp;|&nbsp;
+                            <span style="color: #facc15;">■ Major Axis (L)</span>
+                            <br>
+                            <em>Tip: Click two points on the scale bar in the image above to populate Spatial Calibration coordinates `(X1, Y1)` and `(X2, Y2)`.</em>
+                        </div>
+                    </div>
+
+                    <!-- 2. Original Image -->
+                    <div id="view-original" class="cv-stage-pane" style="display: none;">
+                        <img src="{{ url_for('serve_processed_upload', filename=processed_views.original) }}"
+                             alt="Original Evidence Photograph"
+                             style="max-width: 100%; max-height: 380px; border-radius: var(--radius-sm);">
+                        <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 8px;">
+                            Unmodified Original Evidence Photograph — Preserved in <code>uploads/original/{{ active_image.filename }}</code>
+                        </div>
+                    </div>
+
+                    <!-- 3. Grayscale Image -->
+                    <div id="view-grayscale" class="cv-stage-pane" style="display: none;">
+                        <img src="{{ url_for('serve_processed_upload', filename=processed_views.grayscale) }}"
+                             alt="8-bit Grayscale Conversion"
+                             style="max-width: 100%; max-height: 380px; border-radius: var(--radius-sm);">
+                        <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 8px;">
+                            8-Bit Luminance Conversion (<code>cv2.cvtColor(BGR2GRAY)</code>) + Gaussian Blur ({{ blur_kernel }}&times;{{ blur_kernel }})
+                        </div>
+                    </div>
+
+                    <!-- 4. Active Thresholded Binary -->
+                    <div id="view-threshold" class="cv-stage-pane" style="display: none;">
+                        <img src="{{ url_for('serve_processed_upload', filename=processed_views.thresholded) }}"
+                             alt="Thresholded Binary Mask"
+                             style="max-width: 100%; max-height: 380px; border-radius: var(--radius-sm);">
+                        <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 8px;">
+                            Active Binarization Output — Method: <strong>{{ threshold_method|upper }}</strong>
+                        </div>
+                    </div>
+
+                    <!-- 5. Morphological Filtered Mask -->
+                    <div id="view-morphed" class="cv-stage-pane" style="display: none;">
+                        <img src="{{ url_for('serve_processed_upload', filename=processed_views.morphed) }}"
+                             alt="Morphological Cleaned Segmentation Mask"
+                             style="max-width: 100%; max-height: 380px; border-radius: var(--radius-sm);">
+                        <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 8px;">
+                            Morphological Open &amp; Close Filtering — Suppresses micro-satellite speckle while preserving primary ellipse boundary
+                        </div>
+                    </div>
+
+                    <!-- 6. Side-by-Side Otsu vs Adaptive Comparison -->
+                    <div id="view-compare" class="cv-stage-pane" style="display: none;">
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                            <div>
+                                <div style="font-size: 11.5px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px;">Otsu Global Thresholding</div>
+                                <img src="{{ url_for('serve_processed_upload', filename=processed_views.otsu) }}"
+                                     alt="Otsu Thresholding Output"
+                                     style="max-width: 100%; max-height: 280px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+                            </div>
+                            <div>
+                                <div style="font-size: 11.5px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px;">Adaptive Gaussian Thresholding</div>
+                                <img src="{{ url_for('serve_processed_upload', filename=processed_views.adaptive) }}"
+                                     alt="Adaptive Thresholding Output"
+                                     style="max-width: 100%; max-height: 280px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+                            </div>
+                        </div>
+                        <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 8px;">
+                            Examiner Comparison View: Compare Otsu bimodal separation against localized Adaptive Gaussian windowing.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Subphase 3.2 & 3.3: Preprocessing & Contour Selection Form -->
+                <form method="GET" action="{{ url_for('measurement_workspace') }}" style="margin-top: 16px; padding: 14px; background-color: var(--bg-surface); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+                    <input type="hidden" name="image_id" value="{{ image_id }}">
+                    <input type="hidden" name="case_id" value="{{ selected_case }}">
+                    <input type="hidden" name="evidence_id" value="{{ selected_evidence }}">
+                    <input type="hidden" name="stain_label" value="{{ stain_label }}">
+                    <input type="hidden" name="cal_x1" id="form_cal_x1" value="{{ cal_x1 }}">
+                    <input type="hidden" name="cal_y1" id="form_cal_y1" value="{{ cal_y1 }}">
+                    <input type="hidden" name="cal_x2" id="form_cal_x2" value="{{ cal_x2 }}">
+                    <input type="hidden" name="cal_y2" id="form_cal_y2" value="{{ cal_y2 }}">
+                    <input type="hidden" name="known_length_mm" id="form_known_mm" value="{{ known_length_mm }}">
+
+                    <div style="font-size: 12px; font-weight: 700; text-transform: uppercase; color: var(--text-primary); margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
+                        <span>⚙️ OpenCV Preprocessing &amp; Contour Segmentation Parameters</span>
+                        <span style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);">{{ vision_data.candidates|length }} Contour(s) Detected</span>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px;">
+                        <div>
+                            <label style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 3px;">Threshold Method:</label>
+                            <select name="threshold_method" class="form-control" style="padding: 6px 8px; font-size: 12px;">
+                                <option value="otsu" {% if threshold_method == 'otsu' %}selected{% endif %}>Otsu Global</option>
+                                <option value="adaptive" {% if threshold_method == 'adaptive' %}selected{% endif %}>Adaptive Gaussian</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 3px;">Gaussian Blur Kernel:</label>
+                            <select name="blur_kernel" class="form-control" style="padding: 6px 8px; font-size: 12px;">
+                                <option value="3" {% if blur_kernel == 3 %}selected{% endif %}>3&times;3 (Sharp)</option>
+                                <option value="5" {% if blur_kernel == 5 %}selected{% endif %}>5&times;5 (Standard)</option>
+                                <option value="7" {% if blur_kernel == 7 %}selected{% endif %}>7&times;7 (Smooth)</option>
+                                <option value="9" {% if blur_kernel == 9 %}selected{% endif %}>9&times;9 (Heavy)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 3px;">Mask Polarity:</label>
+                            <select name="invert_binary" class="form-control" style="padding: 6px 8px; font-size: 12px;">
+                                <option value="true" {% if invert_binary %}selected{% endif %}>Dark Stain on Light (Invert)</option>
+                                <option value="false" {% if not invert_binary %}selected{% endif %}>Light Stain on Dark</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 3px;">Min Contour Area (px²):</label>
+                            <input type="number" step="5" min="5" name="min_area" value="{{ min_area }}" class="form-control" style="padding: 6px 8px; font-size: 12px;">
+                        </div>
+                    </div>
+
+                    <!-- Candidate Stain Contour Selector -->
+                    <div style="margin-top: 10px; display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
+                        <div style="flex: 1; min-width: 220px;">
+                            <label style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 3px;">Target Bloodstain Contour Selection:</label>
+                            <select name="selected_candidate_id" class="form-control" style="padding: 6px 8px; font-size: 12px;">
+                                {% for c in vision_data.candidates %}
+                                    <option value="{{ c.candidate_id }}" {% if c.candidate_id == vision_data.selected_candidate.candidate_id %}selected{% endif %}>
+                                        Candidate #{{ c.candidate_id }} — Area: {{ c.area }} px² | Perimeter: {{ c.perimeter }} px | Points: {{ c.point_count }} {% if not c.can_fit_ellipse %}(Insufficient &lt;5 pts){% endif %}
+                                    </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <button type="submit" class="btn btn-secondary btn-sm" style="padding: 7px 14px;">
+                            🔄 Re-Process Pipeline
+                        </button>
+                    </div>
+                </form>
+
+            {% else %}
+                <!-- Default Optical Reticle Box when no image is loaded -->
+                <div class="optical-preview-box">
+                    <div class="reticle-grid"></div>
+                    <div class="reticle-target">
+                        <span style="font-size: 28px; z-index: 2;">🩸</span>
+                    </div>
+                    <div class="placeholder-badge">Computer Vision Optical Station</div>
+                    <div class="placeholder-title">Automated Stain Segmentation &amp; Ellipse Fitting</div>
+                    <div class="placeholder-desc">
+                        Upload a bloodstain evidence photograph above or click one of the Controlled Laboratory Reference Samples to execute OpenCV thresholding, contour extraction, and least-squares ellipse fitting (<code>cv2.fitEllipse</code>).
+                    </div>
+                </div>
+            {% endif %}
+
+            <!-- Subphase 3.5: Spatial Calibration Station -->
+            <div style="margin-top: 18px; padding: 14px; background-color: var(--bg-surface); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+                    <div>
+                        <div style="font-size: 11px; text-transform: uppercase; font-weight: 600; color: var(--text-muted);">Optical Calibration Status:</div>
+                        {% if vision_data and vision_data.calibration and vision_data.calibration.is_calibrated %}
+                            <div style="font-size: 13.5px; font-weight: 600; color: var(--status-active);">
+                                Calibrated Optical Scale ({{ "%.4f"|format(vision_data.calibration.mm_per_pixel) }} mm/px | {{ "%.2f"|format(vision_data.calibration.pixels_per_mm) }} px/mm)
+                            </div>
+                            <span style="display: none;">Pending Spatial Calibration</span>
+                        {% else %}
+                            <div style="font-size: 13.5px; font-weight: 600; color: #fcd34d;">
+                                Pending Spatial Calibration (Uncalibrated Pixel Mode)
+                            </div>
+                        {% endif %}
+                    </div>
+                    {% if vision_data and vision_data.calibration and vision_data.calibration.is_calibrated %}
+                        <span class="status-pill status-active">Calibrated ({{ vision_data.calibration.known_length_mm }} mm)</span>
+                    {% else %}
+                        <span class="status-pill status-review">1.000 px/mm (Uncalibrated)</span>
+                    {% endif %}
+                </div>
+
+                {% if vision_data and vision_data.calibration and vision_data.calibration.warning %}
+                    <div class="alert alert-warning" style="padding: 8px 12px; font-size: 12px; margin-bottom: 10px;">
+                        {{ vision_data.calibration.warning }}
+                    </div>
+                {% endif %}
+
+                {% if image_id %}
+                    <form method="GET" action="{{ url_for('measurement_workspace') }}" id="calibration-form">
+                        <input type="hidden" name="image_id" value="{{ image_id }}">
+                        <input type="hidden" name="case_id" value="{{ selected_case }}">
+                        <input type="hidden" name="evidence_id" value="{{ selected_evidence }}">
+                        <input type="hidden" name="stain_label" value="{{ stain_label }}">
+                        <input type="hidden" name="threshold_method" value="{{ threshold_method }}">
+                        <input type="hidden" name="blur_kernel" value="{{ blur_kernel }}">
+                        <input type="hidden" name="invert_binary" value="{{ 'true' if invert_binary else 'false' }}">
+                        <input type="hidden" name="min_area" value="{{ min_area }}">
+                        <input type="hidden" name="selected_candidate_id" value="{{ selected_candidate_id }}">
+
+                        <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; align-items: end;">
+                            <div>
+                                <label style="font-size: 10.5px; color: var(--text-muted);">Pt 1 X (px)</label>
+                                <input type="number" step="any" name="cal_x1" id="cal_x1" value="{{ cal_x1 }}" class="form-control" style="padding: 5px 8px; font-size: 12px;" placeholder="x1" required>
+                            </div>
+                            <div>
+                                <label style="font-size: 10.5px; color: var(--text-muted);">Pt 1 Y (px)</label>
+                                <input type="number" step="any" name="cal_y1" id="cal_y1" value="{{ cal_y1 }}" class="form-control" style="padding: 5px 8px; font-size: 12px;" placeholder="y1" required>
+                            </div>
+                            <div>
+                                <label style="font-size: 10.5px; color: var(--text-muted);">Pt 2 X (px)</label>
+                                <input type="number" step="any" name="cal_x2" id="cal_x2" value="{{ cal_x2 }}" class="form-control" style="padding: 5px 8px; font-size: 12px;" placeholder="x2" required>
+                            </div>
+                            <div>
+                                <label style="font-size: 10.5px; color: var(--text-muted);">Pt 2 Y (px)</label>
+                                <input type="number" step="any" name="cal_y2" id="cal_y2" value="{{ cal_y2 }}" class="form-control" style="padding: 5px 8px; font-size: 12px;" placeholder="y2" required>
+                            </div>
+                            <div>
+                                <label style="font-size: 10.5px; color: var(--text-muted);">Scale (mm)</label>
+                                <input type="number" step="any" min="0.1" name="known_length_mm" id="known_length_mm" value="{{ known_length_mm if known_length_mm else '10.0' }}" class="form-control" style="padding: 5px 8px; font-size: 12px;" placeholder="10.0" required>
+                            </div>
+                        </div>
+
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; flex-wrap: wrap; gap: 8px;">
+                            <div style="display: flex; gap: 6px;">
+                                <button type="button" class="btn btn-secondary btn-sm" id="btn-preset-scale">
+                                    📏 Use Sample Scale Bar (40 px = 10 mm)
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm" id="btn-clear-scale">
+                                    ✖ Reset Clicks
+                                </button>
+                            </div>
+                            <button type="submit" class="btn btn-primary btn-sm">
+                                ✅ Apply Spatial Calibration
+                            </button>
+                        </div>
+                    </form>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Scientific Principles Reminder Card -->
+        <div class="card">
+            <h3 class="card-title" style="font-size: 14px;">🔬 Geometric Principles Reference</h3>
+            <p style="font-size: 12.5px; color: var(--text-secondary); margin-bottom: 6px;">
+                sin(&alpha;) = Minor Axis (W) / Major Axis (L) &implies; &alpha; = arcsin(W / L)
+            </p>
+            <p class="form-hint">
+                Real bloodstains develop directional spines and secondary satellite spatters. OpenCV morphological opening/closing and direct least-squares ellipse fitting (<code>cv2.fitEllipse</code>) approximate the primary elliptical droplet perimeter while enforcing W &le; L.
+            </p>
+        </div>
+    </div>
+
+    <!-- Right Column: Measurement Controls & Calculated Results -->
+    <div>
+        {% if vision_data and vision_data.ellipse %}
+            <!-- Extracted OpenCV Ellipse Geometry Summary (Subphase 3.4 & 3.6) -->
+            <div class="card" style="margin-bottom: 20px; border-color: rgba(16, 185, 129, 0.35);">
+                <div class="card-header" style="margin-bottom: 12px; padding-bottom: 10px;">
+                    <h2 class="card-title" style="font-size: 15px;">
+                        <span>🎯</span> OpenCV Fitted Ellipse Telemetry (<code>{{ image_id }}</code>)
+                    </h2>
+                    <span class="badge" style="background-color: var(--status-active-bg); color: var(--status-active);">
+                        {{ vision_data.ellipse.point_count }} Contour Vertices
+                    </span>
+                </div>
+
+                <div class="calc-metrics-row" style="margin-bottom: 10px;">
+                    <div class="calc-metric-card">
+                        <div class="label">Minor Axis (W)</div>
+                        <div class="val" style="font-size: 16px; color: #22d3ee;">
+                            {{ "%.2f"|format(vision_data.ellipse.minor_axis_px) }} px
+                        </div>
+                        {% if vision_data.ellipse.is_calibrated %}
+                            <div style="font-size: 11.5px; color: var(--status-active); font-family: var(--font-mono);">
+                                {{ "%.2f"|format(vision_data.ellipse.width_mm) }} mm
+                            </div>
+                        {% endif %}
+                    </div>
+                    <div class="calc-metric-card">
+                        <div class="label">Major Axis (L)</div>
+                        <div class="val" style="font-size: 16px; color: #facc15;">
+                            {{ "%.2f"|format(vision_data.ellipse.major_axis_px) }} px
+                        </div>
+                        {% if vision_data.ellipse.is_calibrated %}
+                            <div style="font-size: 11.5px; color: var(--status-active); font-family: var(--font-mono);">
+                                {{ "%.2f"|format(vision_data.ellipse.length_mm) }} mm
+                            </div>
+                        {% endif %}
+                    </div>
+                    <div class="calc-metric-card">
+                        <div class="label">Orientation</div>
+                        <div class="val" style="font-size: 16px; color: var(--text-primary);">
+                            {{ "%.1f"|format(vision_data.ellipse.orientation_deg) }}°
+                        </div>
+                        <div style="font-size: 11px; color: var(--text-muted);">
+                            Center ({{ vision_data.ellipse.center_x }}, {{ vision_data.ellipse.center_y }})
+                        </div>
+                    </div>
+                </div>
+            </div>
+        {% endif %}
+
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <span>⚙️</span> Stain Measurement Controls
+                </h2>
+                <span class="status-pill status-active">● Active Engine</span>
+            </div>
+
+            <p class="form-hint" style="margin-bottom: 12px;">Pre-populate sample geometric impact angles:</p>
+            <div class="preset-group">
+                <button type="button" class="btn-preset" data-width="5.0" data-length="10.0">30° Oblique</button>
+                <button type="button" class="btn-preset" data-width="7.07" data-length="10.0">45° Strike</button>
+                <button type="button" class="btn-preset" data-width="8.66" data-length="10.0">60° Incline</button>
+                <button type="button" class="btn-preset" data-width="10.0" data-length="10.0">90° Perpendicular</button>
+                <button type="button" class="btn-preset" data-width="2.59" data-length="10.0">15° Glancing</button>
+            </div>
+
+            <form method="POST" action="{{ url_for('measurement_workspace') }}" id="measurement-form">
+                <input type="hidden" name="image_id" value="{{ image_id }}">
+                <input type="hidden" name="threshold_method" value="{{ threshold_method }}">
+                <input type="hidden" name="blur_kernel" value="{{ blur_kernel }}">
+                <input type="hidden" name="invert_binary" value="{{ 'true' if invert_binary else 'false' }}">
+                <input type="hidden" name="min_area" value="{{ min_area }}">
+                <input type="hidden" name="selected_candidate_id" value="{{ selected_candidate_id }}">
+                <input type="hidden" name="cal_x1" value="{{ cal_x1 }}">
+                <input type="hidden" name="cal_y1" value="{{ cal_y1 }}">
+                <input type="hidden" name="cal_x2" value="{{ cal_x2 }}">
+                <input type="hidden" name="cal_y2" value="{{ cal_y2 }}">
+                <input type="hidden" name="known_length_mm" value="{{ known_length_mm }}">
+
+                <!-- Case & Evidence Association -->
+                <div class="form-grid" style="margin-bottom: 12px;">
+                    <div class="form-group">
+                        <label for="case_id">Associated Case (Optional):</label>
+                        <select name="case_id" id="case_id" class="form-control">
+                            <option value="">-- Standalone Measurement --</option>
+                            {% for c in cases %}
+                                <option value="{{ c.case_id }}" {% if selected_case == c.case_id %}selected{% endif %}>
+                                    {{ c.case_id }} — {{ c.title[:24] }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="stain_label">Stain Label / Index:</label>
+                        <input 
+                            type="text" 
+                            name="stain_label" 
+                            id="stain_label" 
+                            class="form-control" 
+                            value="{{ stain_label if stain_label else 'Stain-01' }}"
+                        >
+                    </div>
+                </div>
+
+                {% if evidence_list %}
+                <div class="form-group">
+                    <label for="evidence_id">Associated Physical Evidence Record (Optional):</label>
+                    <select name="evidence_id" id="evidence_id" class="form-control">
+                        <option value="">-- Unlinked / General Case Stain --</option>
+                        {% for ev in evidence_list %}
+                            <option value="{{ ev.evidence_id }}" {% if selected_evidence == ev.evidence_id %}selected{% endif %}>
+                                {{ ev.evidence_id }} ({{ ev.case_id }}) — {{ ev.description[:36] }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% endif %}
+
+                <div class="form-group">
+                    <label for="width">
+                        Minor Axis — Width (W) in {% if vision_data and not vision_data.ellipse.is_calibrated %}px (Uncalibrated){% else %}mm{% endif %}:
+                    </label>
+                    <input 
+                        type="number" 
+                        step="any" 
+                        class="form-control" 
+                        id="width" 
+                        name="width" 
+                        value="{{ width if width is not none else '5.0' }}" 
+                        required
+                    >
+                    <p class="form-hint">Transverse dimension across the ellipse body (auto-filled by OpenCV when image is active).</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="length">
+                        Major Axis — Length (L) in {% if vision_data and not vision_data.ellipse.is_calibrated %}px (Uncalibrated){% else %}mm{% endif %}:
+                    </label>
+                    <input 
+                        type="number" 
+                        step="any" 
+                        class="form-control" 
+                        id="length" 
+                        name="length" 
+                        value="{{ length if length is not none else '10.0' }}" 
+                        required
+                    >
+                    <p class="form-hint">Longest dimension along travel direction (W &le; L).</p>
+                </div>
+
+                <div style="display: flex; gap: 10px; margin-top: 14px;">
+                    <button type="submit" name="form_action" value="calculate" class="btn btn-primary" style="flex: 1;">
+                        📐 Compute Impact Angle
+                    </button>
+                    <button type="submit" name="save_record" value="true" class="btn btn-secondary">
+                        💾 Compute &amp; Save
+                    </button>
+                </div>
+            </form>
+
+            <!-- Results Output -->
+            <div style="margin-top: 20px;">
+                {% if error %}
+                    <div class="alert alert-danger" role="alert">
+                        <strong>❌ Validation Error:</strong> {{ error }}
+                    </div>
+                {% endif %}
+
+                {% if result %}
+                    <div class="card-header" style="margin-top: 14px; margin-bottom: 12px; padding-bottom: 8px;">
+                        <h3 class="card-title" style="font-size: 14px;">
+                            <span>📊</span> Mathematical Analysis Output
+                        </h3>
+                        <span class="status-pill status-active">Analysis Complete</span>
+                    </div>
+
+                    <div class="calc-metrics-row">
+                        <div class="calc-metric-card">
+                            <div class="label">Impact Angle (&alpha;)</div>
+                            <div class="val">{{ "%.2f"|format(result.angle_degrees) }}°</div>
+                        </div>
+                        <div class="calc-metric-card">
+                            <div class="label">Sine Ratio (W/L)</div>
+                            <div class="val">{{ "%.4f"|format(result.ratio) }}</div>
+                        </div>
+                        <div class="calc-metric-card">
+                            <div class="label">Angle (Radians)</div>
+                            <div class="val">{{ "%.4f"|format(result.angle_radians) }}</div>
+                        </div>
+                    </div>
+
+                    {% if result.is_perpendicular %}
+                        <div class="alert alert-info">
+                            <strong>Circular Stain:</strong> {{ result.interpretation }}
+                        </div>
+                    {% elif result.angle_degrees < 30.0 %}
+                        <div class="alert alert-warning">
+                            <strong>Acute Incline:</strong> {{ result.interpretation }}
+                        </div>
+                    {% else %}
+                        <div class="alert alert-info">
+                            <strong>Oblique Strike:</strong> {{ result.interpretation }}
+                        </div>
+                    {% endif %}
+
+                    <!-- Analysis Status Box -->
+                    <div style="padding: 12px; background-color: var(--bg-surface); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); margin-top: 12px;">
+                        <div style="font-size: 11px; text-transform: uppercase; font-weight: 600; color: var(--text-muted); margin-bottom: 2px;">
+                            Verification Status:
+                        </div>
+                        <div style="font-size: 12.5px; color: var(--text-secondary);">
+                            {% if vision_data %}
+                                ✓ OpenCV optical segmentation &amp; least-squares ellipse fitting (Phase 3) paired with verified trigonometric solver (Phase 1).
+                            {% else %}
+                                ✓ Manual trigonometric calculation engine verified (Phase 1). Upload an image above to engage OpenCV automated contour detection.
+                            {% endif %}
+                        </div>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

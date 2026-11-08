@@ -35,20 +35,40 @@ Where:
 
 ```text
 bloodstain-pattern-measurement-calculator/
-├── app.py                   # Streamlit interactive web application
+├── app.py                   # Flask interactive laboratory web application
 ├── calculator.py            # Core trigonometric calculation engine & validation
-├── image_processing.py      # OpenCV computer vision module (Milestone 2)
-├── report_generator.py      # ReportLab PDF report generation (Milestone 3)
+├── database.py              # SQLite data persistence layer (cases, evidence, measurements)
+├── image_processing.py      # OpenCV computer vision module (Milestone 3)
+├── report_generator.py      # ReportLab PDF report generation (Milestone 4)
+├── database/                # SQLite persistent storage
+│   └── forensic.db
+├── templates/               # Flask Jinja2 HTML templates
+│   ├── base.html            # Master layout with responsive sidebar navigation
+│   ├── index.html           # Main Laboratory Dashboard
+│   ├── cases.html           # Case Registry with search & status filters
+│   ├── case_form.html       # Initiate New Forensic Case form
+│   ├── case_detail.html     # Case Inspection & linked evidence view
+│   ├── evidence.html        # Physical Evidence Vault
+│   ├── evidence_form.html   # Log New Evidence Item form
+│   ├── measurement.html     # Measurement Workspace (Optical staging & manual controls)
+│   └── results.html         # Results & Trajectory Dashboard
+├── static/                  # Static web assets
+│   ├── css/style.css        # Dark navy/charcoal forensic laboratory stylesheet
+│   ├── js/main.js           # Interactive client presets script & mobile menu
+│   └── images/              # Static images directory
 ├── sample_images/           # Educational sample bloodstain images
 │   └── README.md
 ├── assets/                  # Diagrams, figures, and UI assets
 │   └── README.md
 ├── tests/                   # Automated test suite
 │   ├── __init__.py
-│   └── test_calculator.py   # Unit tests covering validation and math
+│   ├── test_calculator.py   # 15 Unit tests covering validation and math
+│   ├── test_app.py          # 7 Smoke and integration tests for Flask app
+│   ├── test_phase2.py       # 10 Tests for cases, evidence, and workspaces
+│   └── test_phase3.py       # 11 Tests for OpenCV computer vision & spatial calibration
 ├── requirements.txt         # Project dependencies
 ├── README.md                # Comprehensive project documentation
-├── .gitignore               # Ignored files (virtual environments, caches)
+├── .gitignore               # Ignored files (virtual environments, databases, caches)
 └── LICENSE                  # MIT Open-Source License
 ```
 
@@ -56,11 +76,11 @@ bloodstain-pattern-measurement-calculator/
 
 ## 🛠️ Technology Stack
 
-- **Python 3.10+**: Core programming language.
-- **Streamlit**: Interactive web dashboard.
-- **NumPy**: Numerical arrays and scientific math.
-- **OpenCV (`opencv-python-headless`)**: Image preprocessing and ellipse contour detection (Milestone 2).
-- **Matplotlib**: Ellipse fitting visualization and spatter graphs.
+- **Python 3.14+**: Core programming language.
+- **Flask**: Lightweight WSGI web application framework.
+- **NumPy & SciPy**: Scientific computing, numerical arrays & trigonometric calculations.
+- **OpenCV (`opencv-python`) & Pillow**: Image preprocessing and ellipse contour detection (Milestone 2).
+- **Matplotlib & Pandas**: Visualization, plotting, and structured data analysis.
 - **ReportLab**: Structured PDF export (Milestone 3).
 - **pytest / unittest**: Automated test coverage.
 
@@ -113,14 +133,14 @@ pytest -v
 
 ---
 
-## 🌐 Launching the Streamlit Application
+## 🌐 Launching the Flask Web Application
 
 Start the local web server:
 ```powershell
-streamlit run app.py
+python app.py
 ```
 
-Once started, open your web browser to `http://localhost:8501`.
+Once started, open your web browser to `http://127.0.0.1:5000`.
 
 ---
 
@@ -129,19 +149,31 @@ Once started, open your web browser to `http://localhost:8501`.
 - [x] **Milestone 1: Core Engine & Validation**
   - Implement $\alpha = \arcsin(W/L)$ with degree conversion.
   - Strict input validation (empty values, negative numbers, zero values, $W > L$, non-numeric input).
-  - Streamlit user interface with presets, metrics, and scientific explanations.
+  - Flask user interface with presets, responsive metrics, and scientific explanations.
   - Automated unit test suite with 100% core pass rate.
   - Clean repository structure, `.gitignore`, and MIT License.
 
-- [ ] **Milestone 2: OpenCV Image Processing**
-  - Digital bloodstain image upload.
-  - Automatic binarization and morphological filtering.
-  - Direct least-squares ellipse fitting (`cv2.fitEllipse`).
-  - Automated extraction of minor and major axes.
+- [x] **Milestone 2: Frontend, Dashboard & Case Management**
+  - Dark navy/charcoal laboratory design system with subtle crimson accents.
+  - SQLite persistent data layer (`database.py`) for cases, evidence items, and stain calculations.
+  - Main Dashboard with real-time laboratory metrics, recent case activities, and quick actions.
+  - Case Registry with unique Case ID generation (`BPA-YYYY-NNNN`), search, and status tracking.
+  - Physical Evidence Vault for logging patterns (Impact Spatter, Cast-off, Transfer, etc.).
+  - Measurement Workspace Interface with Phase 3 optical reticle staging and manual calculation mode.
+  - Results Dashboard with verified measurement history and trajectory placeholders.
+  - 32/32 automated tests passing with 100% pass rate.
 
-- [ ] **Milestone 3: Visualization & PDF Reporting**
-  - Matplotlib visual overlays of detected ellipse on the original stain.
-  - Printable educational PDF report with case details, metrics, and disclaimers.
+- [x] **Milestone 3: Computer Vision Optical Analysis (OpenCV)**
+  - Secure digital bloodstain photographic image acquisition (`uploads/original/`, `uploads/processed/`) and SQLite metadata tracking (`evidence_images`).
+  - Grayscale conversion, Gaussian blur, Otsu global vs Adaptive Gaussian thresholding comparison, and morphological opening/closing cleanup.
+  - Contour segmentation, candidate stain selection, and direct least-squares ellipse fitting (`cv2.fitEllipse`) with enforced $W \le L$.
+  - Interactive 2-point spatial pixel-to-millimeter calibration and multi-layer visual inspection overlays.
+  - 43/43 automated regression and computer vision tests passing with 100% pass rate.
+
+- [ ] **Milestone 4: Trajectory Projection & PDF Reporting**
+  - 2D Area of Convergence vector projection.
+  - 3D Area of Origin spatial height ($Z$) triangulation.
+  - Printable forensic case summary PDF reports via ReportLab.
 
 ---
 
