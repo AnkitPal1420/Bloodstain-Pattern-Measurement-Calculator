@@ -315,6 +315,41 @@ def init_db(seed_demo: bool = False) -> None:
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_pat_image_id ON pattern_analyses(image_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_pat_analysis_id ON pattern_analyses(analysis_id);")
 
+    # 11. Overlapping & Complex Bloodstain Analysis table (Phase 5.2)
+    # Tracks connected stain regions, marker-watershed candidate subdivisions,
+    # and examiner review decisions (Accepted / Rejected / Indeterminate) across non-destructive revisions.
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS overlap_analyses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            analysis_id TEXT UNIQUE NOT NULL,
+            case_id TEXT NOT NULL,
+            evidence_id TEXT,
+            image_id TEXT,
+            revision_number INTEGER NOT NULL DEFAULT 1,
+            algorithm_name TEXT NOT NULL,
+            algorithm_version TEXT NOT NULL,
+            is_calibrated INTEGER NOT NULL DEFAULT 0,
+            mm_per_pixel REAL,
+            parameters_json TEXT NOT NULL,
+            summary_json TEXT NOT NULL,
+            regions_json TEXT NOT NULL,
+            accepted_stains_json TEXT,
+            review_status TEXT NOT NULL DEFAULT 'Preliminary — Examiner Review Required',
+            examiner_name TEXT,
+            examiner_notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (case_id) REFERENCES cases (case_id) ON DELETE CASCADE,
+            FOREIGN KEY (evidence_id) REFERENCES evidence (evidence_id) ON DELETE SET NULL,
+            FOREIGN KEY (image_id) REFERENCES evidence_images (image_id) ON DELETE SET NULL
+        );
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ovr_case_id ON overlap_analyses(case_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ovr_image_id ON overlap_analyses(image_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ovr_analysis_id ON overlap_analyses(analysis_id);")
+
     conn.commit()
     conn.close()
 
@@ -323,9 +358,10 @@ def init_db(seed_demo: bool = False) -> None:
 
 
 def clear_all_data() -> None:
-    """Clear all records from pattern_analyses, audit_logs, reports, reconstruction tables, measurements, evidence_images, evidence, and cases."""
+    """Clear all records from overlap_analyses, pattern_analyses, audit_logs, reports, reconstruction tables, measurements, evidence_images, evidence, and cases."""
     conn = get_db_connection()
     try:
+        conn.execute("DELETE FROM overlap_analyses;")
         conn.execute("DELETE FROM pattern_analyses;")
         conn.execute("DELETE FROM audit_logs;")
         conn.execute("DELETE FROM reports;")
@@ -2023,6 +2059,257 @@ def get_pattern_analyses_for_case(case_id: str) -> List[Dict[str, Any]]:
     rows = [dict(r) for r in cursor.fetchall()]
     conn.close()
     return rows
+
+
+# ===========================================================================
+# Phase 5.2 — Overlapping & Complex Bloodstain Analysis CRUD & Audit
+# ===========================================================================
+
+
+def get_next_overlap_analysis_revision(case_id: str, image_id: Optional[str] = None) -> int:
+    """Calculate the next revision number for an overlap analysis on a case/image."""
+    conn = get_db_connection()
+    if image_id and str(image_id).strip():
+        row = conn.execute(
+            """
+            SELECT COALESCE(MAX(revision_number), 0) + 1 AS next_rev
+            FROM overlap_analyses
+            WHERE case_id = ? AND image_id = ?;
+            """,
+            (case_id.strip(), str(image_id).strip()),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            SELECT COALESCE(MAX(revision_number), 0) + 1 AS next_rev
+            FROM overlap_analyses
+            WHERE case_id = ?;
+            """,
+            (case_id.strip(),),
+        ).fetchone()
+    conn.close()
+    return int(row["next_rev"]) if row else 1
+
+
+def generate_overlap_analysis_id(revision_number: int = 1) -> str:
+    """Generate a unique overlap analysis ID, e.g., OVR-2026-4812-R1."""
+    year = datetime.now().year
+    rand_part = random.randint(1000, 9999)
+    return f"OVR-{year}-{rand_part}-R{revision_number}"
+
+
+def create_overlap_analysis_record(
+    case_id: str,
+    evidence_id: Optional[str],
+    image_id: Optional[str],
+    algorithm_name: str,
+    algorithm_version: str,
+    is_calibrated: bool,
+    mm_per_pixel: Optional[float],
+    parameters_json: str,
+    summary_json: str,
+    regions_json: str,
+    accepted_stains_json: Optional[str] = None,
+    review_status: str = "Preliminary — Examiner Review Required",
+    examiner_name: Optional[str] = None,
+    examiner_notes: Optional[str] = None,
+    analysis_id: Optional[str] = None,
+    revision_number: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Persist a newly computed complex/overlapping stain analysis record and record audit logs:
+    - Complex Image Analysis Created
+    - Connected Regions Detected
+    - Segmentation Generated
+    """
+    rev = (
+        int(revision_number)
+        if revision_number is not None
+        else get_next_overlap_analysis_revision(case_id=case_id, image_id=image_id)
+    )
+    aid = analysis_id.strip() if analysis_id else generate_overlap_analysis_id(revision_number=rev)
+
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO overlap_analyses (
+                analysis_id, case_id, evidence_id, image_id, revision_number,
+                algorithm_name, algorithm_version, is_calibrated, mm_per_pixel,
+                parameters_json, summary_json, regions_json, accepted_stains_json,
+                review_status, examiner_name, examiner_notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            (
+                aid,
+                case_id.strip(),
+                evidence_id.strip() if evidence_id and str(evidence_id).strip() else None,
+                image_id.strip() if image_id and str(image_id).strip() else None,
+                rev,
+                algorithm_name.strip(),
+                algorithm_version.strip(),
+                1 if is_calibrated else 0,
+                float(mm_per_pixel) if (is_calibrated and mm_per_pixel is not None) else None,
+                parameters_json,
+                summary_json,
+                regions_json,
+                accepted_stains_json,
+                review_status.strip() if review_status else "Preliminary — Examiner Review Required",
+                examiner_name.strip() if examiner_name else None,
+                examiner_notes.strip() if examiner_notes else None,
+            ),
+        )
+
+        create_action = "Segmentation Revision Saved" if rev > 1 else "Complex Image Analysis Created"
+        log_audit_event(
+            action_type=create_action,
+            entity_type="overlap_analysis",
+            entity_id=aid,
+            case_id=case_id,
+            details=f"Image={image_id or 'None'}, Rev=R{rev}, Calibrated={bool(is_calibrated)}",
+            conn=conn,
+        )
+        log_audit_event(
+            action_type="Connected Regions Detected",
+            entity_type="overlap_analysis",
+            entity_id=aid,
+            case_id=case_id,
+            details=f"Analysis={aid}, Image={image_id or 'None'}",
+            conn=conn,
+        )
+        log_audit_event(
+            action_type="Segmentation Generated",
+            entity_type="overlap_analysis",
+            entity_id=aid,
+            case_id=case_id,
+            details=f"Algorithm={algorithm_name} {algorithm_version}",
+            conn=conn,
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    return get_overlap_analysis_by_id(aid)
+
+
+def update_overlap_analysis_review(
+    analysis_id: str,
+    regions_json: str,
+    accepted_stains_json: str,
+    summary_json: Optional[str] = None,
+    review_status: str = "Examiner Reviewed",
+    examiner_name: Optional[str] = None,
+    examiner_notes: Optional[str] = None,
+    action_type: str = "Segmentation Accepted",
+) -> Optional[Dict[str, Any]]:
+    """
+    Update examiner decisions on an existing overlap analysis and log audit events:
+    - Segmentation Accepted
+    - Segmentation Rejected
+    - Region Marked Indeterminate
+    - Measurements Updated Following Approved Segmentation
+    """
+    existing = get_overlap_analysis_by_id(analysis_id)
+    if not existing:
+        return None
+
+    new_sum = summary_json if summary_json is not None else existing["summary_json"]
+    new_name = examiner_name.strip() if examiner_name is not None else existing["examiner_name"]
+    new_notes = examiner_notes.strip() if examiner_notes is not None else existing["examiner_notes"]
+
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            UPDATE overlap_analyses
+            SET regions_json = ?,
+                accepted_stains_json = ?,
+                summary_json = ?,
+                review_status = ?,
+                examiner_name = ?,
+                examiner_notes = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE analysis_id = ?;
+            """,
+            (
+                regions_json,
+                accepted_stains_json,
+                new_sum,
+                review_status.strip(),
+                new_name,
+                new_notes,
+                analysis_id.strip(),
+            ),
+        )
+
+        log_audit_event(
+            action_type=action_type,
+            entity_type="overlap_analysis",
+            entity_id=analysis_id.strip(),
+            case_id=existing["case_id"],
+            details=f"Status={review_status}, Examiner={new_name or 'Unknown'}",
+            conn=conn,
+        )
+        if action_type == "Segmentation Accepted":
+            log_audit_event(
+                action_type="Measurements Updated Following Approved Segmentation",
+                entity_type="overlap_analysis",
+                entity_id=analysis_id.strip(),
+                case_id=existing["case_id"],
+                details=f"Approved individual child stains registered for {analysis_id.strip()}",
+                conn=conn,
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    return get_overlap_analysis_by_id(analysis_id)
+
+
+def get_overlap_analysis_by_id(analysis_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve an overlap analysis record by its unique analysis_id."""
+    if not analysis_id or not str(analysis_id).strip():
+        return None
+    conn = get_db_connection()
+    cursor = conn.execute(
+        """
+        SELECT oa.*, ei.original_filename AS image_filename, ei.filepath AS image_filepath
+        FROM overlap_analyses oa
+        LEFT JOIN evidence_images ei ON oa.image_id = ei.image_id
+        WHERE oa.analysis_id = ?;
+        """,
+        (str(analysis_id).strip(),),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_overlap_analyses_for_case(case_id: str) -> List[Dict[str, Any]]:
+    """Retrieve all overlap analyses for a given case_id ordered newest first."""
+    if not case_id or not str(case_id).strip():
+        return []
+    conn = get_db_connection()
+    cursor = conn.execute(
+        """
+        SELECT oa.*, ei.original_filename AS image_filename, ei.filepath AS image_filepath
+        FROM overlap_analyses oa
+        LEFT JOIN evidence_images ei ON oa.image_id = ei.image_id
+        WHERE oa.case_id = ?
+        ORDER BY oa.id DESC;
+        """,
+        (str(case_id).strip(),),
+    )
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
 
 
 

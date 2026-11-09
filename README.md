@@ -65,6 +65,8 @@ Then open **`http://127.0.0.1:5000`** in your web browser.
    Linear back-projection neglects aerodynamic drag and gravitational parabolic drop ($g = 9.81\text{ m/s}^2$). Consequently, straight-line triangulation systematically **overestimates** the true height of origin ($Z_{\text{linear}} \ge Z_{\text{true}}$). Computed coordinates represent an **approximate region of origin**, not an exact mathematical point source.
 4. **Digital Integrity vs. Chain of Custody:**
    SHA-256 cryptographic digests recorded in `reports` and `audit_logs` verify digital file integrity at the time of ingestion or PDF compilation; they do not by themselves establish physical chain of custody.
+5. **Overlapping & Complex Stain Boundaries:**
+   Automated distance-transform watershed segmentation generates candidate stain boundaries based on distance map local maxima and boundary concavity defects. Under SWGSTAIN/OSAC standards, touching or merged contours must **never** be presumed to represent multiple independent droplets without morphological verification. Candidate segmentations require forensic examiner review, and indeterminate regions remain preserved as unresolved single entities. Area conservation metrics ($|A_{\text{parent}} - \sum A_{\text{children}}|$) track discretization effects.
 
 ---
 
@@ -79,3 +81,4 @@ Then open **`http://127.0.0.1:5000`** in your web browser.
 - [x] **Milestone 4.4:** Professional Forensic PDF Report Generation (`report_generator.py`)
 - [x] **Milestone 4.5:** Complete System Integration, Scientific Validation, Security Audit & Final Release (`tests/test_phase4_final_validation.py`)
 - [x] **Milestone 5.1:** Advanced Bloodstain Pattern Classification & Analytical Decision Support (`pattern_analysis.py`, `templates/pattern_analysis.html`, `tests/test_phase5_1_pattern_analysis.py`)
+- [x] **Milestone 5.2:** Advanced Overlapping & Complex Bloodstain Pattern Analysis (`overlap_analysis.py`, `templates/overlap_analysis.html`, `tests/test_phase5_2_overlap_analysis.py`)

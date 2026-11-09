@@ -1,0 +1,479 @@
+{% extends "base.html" %}
+
+{% block title %}Complex &amp; Overlapping Stain Analysis — {{ case.case_id }}{% endblock %}
+{% block breadcrumb %}Forensic Workspaces / Complex &amp; Overlap / {{ case.case_id }}{% endblock %}
+
+{% block content %}
+<!-- Top Header & Mandatory Scientific Rule Notice -->
+<div class="card" style="margin-bottom: 18px; border-left: 4px solid #fbbf24;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 14px;">
+        <div>
+            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex-wrap: wrap;">
+                <span class="case-id-badge">{{ case.case_id }}</span>
+                <span class="badge" style="background-color: rgba(251,191,36,0.16); color: #fbbf24; border: 1px solid rgba(251,191,36,0.35);">
+                    Phase 5.2 — Advanced Overlapping &amp; Complex Bloodstain Analysis
+                </span>
+                <span class="badge" style="background-color: rgba(56,189,248,0.16); color: #38bdf8; border: 1px solid rgba(56,189,248,0.35);">
+                    Distance-Transform Watershed Segmentation
+                </span>
+            </div>
+            <h1 class="card-title" style="font-size: 19px;">
+                <span>🧩</span> Overlapping, Touching &amp; Complex Bloodstain Segmentation Laboratory
+            </h1>
+            <p style="color: var(--text-secondary); font-size: 13px; margin-top: 4px; max-width: 940px;">
+                Assist forensic examiners in detecting, segmenting, and reviewing touching, overlapping, and merged bloodstains.
+                <strong style="color: #fcd34d;">CRITICAL RULE: Never automatically claim a merged contour represents a specific number of stains unless topological evidence supports it; uncertain regions remain preserved as unresolved merged entities.</strong>
+            </p>
+        </div>
+
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <a href="{{ url_for('case_detail', case_id=case.case_id) }}" class="btn btn-secondary btn-sm">
+                📁 Case File
+            </a>
+            <a href="{{ url_for('pattern_analysis_workspace', case_id=case.case_id) }}" class="btn btn-secondary btn-sm">
+                🧬 Pattern Classification
+            </a>
+            <a href="{{ url_for('measurement_workspace') }}?case_id={{ case.case_id }}" class="btn btn-secondary btn-sm">
+                📐 Measurement Lab
+            </a>
+            <form method="POST" action="{{ url_for('generate_case_report_route', case_id=case.case_id) }}" style="display: inline;">
+                <input type="hidden" name="report_status" value="DRAFT">
+                <button type="submit" class="btn btn-primary btn-sm">
+                    📄 Export PDF Report
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Provenance & Workflow Legend -->
+    <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-subtle); display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 11.5px;">
+        <span style="color: var(--text-muted); font-weight: 700; text-transform: uppercase;">Segmentation Governance:</span>
+        <span class="badge" style="background: rgba(56,189,248,0.15); color: #38bdf8; border: 1px solid rgba(56,189,248,0.35);">
+            [Automatically Measured] — Distance peaks &amp; concavity defects
+        </span>
+        <span class="badge" style="background: rgba(251,191,36,0.15); color: #fbbf24; border: 1px solid rgba(251,191,36,0.35);">
+            [Software Suggested] — Candidate watershed cut boundaries
+        </span>
+        <span class="badge" style="background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.35);">
+            [Examiner Approved] — Validated individual stain boundaries
+        </span>
+        <span class="badge" style="background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.35);">
+            [Unresolved Merged] — Preserved single entity when split rejected
+        </span>
+    </div>
+</div>
+
+<!-- Image & Analysis Selection Panel -->
+<div class="card" style="margin-bottom: 18px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 14px;">
+        <h2 class="card-title" style="font-size: 15.5px;">
+            <span>📸</span> 1. Evidence Image Selection &amp; Controlled Analysis Execution
+        </h2>
+        {% if active_analysis %}
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="badge" style="background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-subtle);">
+                    Active Analysis: <strong>{{ active_analysis.analysis_id }}</strong> (Rev R{{ active_analysis.revision_number }})
+                </span>
+                <span class="status-pill {% if 'Approved' in active_analysis.review_status %}status-completed{% elif 'Reviewed' in active_analysis.review_status %}status-review{% else %}status-active{% endif %}">
+                    ● {{ active_analysis.review_status }}
+                </span>
+            </div>
+        {% endif %}
+    </div>
+
+    <form method="POST" action="{{ url_for('overlap_analysis_run_route', case_id=case.case_id) }}" style="display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;">
+        <div style="flex: 1; min-width: 250px;">
+            <label for="image_id" class="form-label" style="font-size: 12px; font-weight: 600;">
+                Select Case Evidence Photograph:
+            </label>
+            <select name="image_id" id="image_id" class="form-control">
+                {% if case_images %}
+                    {% for im in case_images %}
+                        <option value="{{ im.image_id }}" {% if active_image and active_image.image_id == im.image_id %}selected{% endif %}>
+                            {{ im.image_id }} — {{ im.original_filename }} ({{ im.width_px }}x{{ im.height_px }} px, {% if im.is_calibrated %}Calibrated {{ '%.4f'|format(im.scale_factor) }} mm/px{% else %}Uncalibrated px{% endif %})
+                        </option>
+                    {% endfor %}
+                {% else %}
+                    <option value="">-- No images uploaded to case yet --</option>
+                {% endif %}
+            </select>
+        </div>
+
+        <div style="width: 140px;">
+            <label class="form-label" style="font-size: 12px; font-weight: 600;">Min Area (px²):</label>
+            <input type="number" name="min_area_px" class="form-control" value="20.0" min="5.0" step="5.0">
+        </div>
+
+        <div style="width: 150px;">
+            <label class="form-label" style="font-size: 12px; font-weight: 600;">Peak Dist (px):</label>
+            <input type="number" name="min_peak_distance_px" class="form-control" value="8.0" min="3.0" step="1.0">
+        </div>
+
+        <div style="width: 150px;">
+            <label class="form-label" style="font-size: 12px; font-weight: 600;">Peak Ratio (0.2–0.8):</label>
+            <input type="number" name="peak_threshold_ratio" class="form-control" value="0.35" min="0.15" max="0.85" step="0.05">
+        </div>
+
+        <div>
+            <button type="submit" class="btn btn-primary" {% if not case_images %}disabled{% endif %}>
+                <span>⚙️</span> Detect &amp; Segment Overlaps
+            </button>
+        </div>
+    </form>
+
+    <!-- Controlled Synthetic Reference Sample Loader -->
+    <div style="margin-top: 14px; padding-top: 10px; border-top: 1px dashed var(--border-subtle);">
+        <div style="font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px;">
+            Or Load Controlled Reference Sample for Overlap Testing:
+        </div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <form method="POST" action="{{ url_for('overlap_analysis_run_route', case_id=case.case_id) }}" style="display: inline;">
+                <input type="hidden" name="sample_name" value="sample_overlap_pair.png">
+                <button type="submit" class="btn btn-secondary btn-sm">🔴 Touching / Overlapping Pair</button>
+            </form>
+            <form method="POST" action="{{ url_for('overlap_analysis_run_route', case_id=case.case_id) }}" style="display: inline;">
+                <input type="hidden" name="sample_name" value="sample_spatter_cluster.png">
+                <button type="submit" class="btn btn-secondary btn-sm">💥 Spatter Cluster</button>
+            </form>
+            <form method="POST" action="{{ url_for('overlap_analysis_run_route', case_id=case.case_id) }}" style="display: inline;">
+                <input type="hidden" name="sample_name" value="sample_30deg_oblique.png">
+                <button type="submit" class="btn btn-secondary btn-sm">🩸 30° Oblique Single</button>
+            </form>
+            <form method="POST" action="{{ url_for('overlap_analysis_run_route', case_id=case.case_id) }}" style="display: inline;">
+                <input type="hidden" name="sample_name" value="sample_45deg_calibrated.png">
+                <button type="submit" class="btn btn-secondary btn-sm">📏 45° Calibrated</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% if analyses %}
+    <!-- Revision History Selector -->
+    <div class="card" style="margin-bottom: 18px; padding: 12px 18px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+            <div style="font-size: 13px; font-weight: 600; color: var(--text-secondary);">
+                <span>📜</span> Historical Revisions for Case {{ case.case_id }}:
+            </div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                {% for a in analyses %}
+                    <a href="{{ url_for('overlap_analysis_workspace', case_id=case.case_id, analysis_id=a.analysis_id) }}"
+                       class="btn btn-sm {% if active_analysis and active_analysis.analysis_id == a.analysis_id %}btn-primary{% else %}btn-secondary{% endif %}"
+                       style="font-family: var(--font-mono); font-size: 11.5px;">
+                        {{ a.analysis_id }} (Rev R{{ a.revision_number }}) — {{ a.review_status }}
+                    </a>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+{% endif %}
+
+{% if analysis_data %}
+    {% set summary = analysis_data.summary %}
+    {% set regions = analysis_data.regions %}
+
+    <!-- Aggregate Topology Statistics Grid -->
+    <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); margin-bottom: 18px;">
+        <div class="stat-card">
+            <div class="stat-content">
+                <div class="stat-label">Total Connected Regions</div>
+                <div class="stat-value">{{ summary.total_regions }}</div>
+                <div class="stat-meta">Component count</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-content">
+                <div class="stat-label">Isolated Stains</div>
+                <div class="stat-value" style="color: #34d399;">{{ summary.type_counts.isolated if (summary and summary.type_counts) else 0 }}</div>
+                <div class="stat-meta">Single-peak regions</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-content">
+                <div class="stat-label">Touching / Overlapping</div>
+                <div class="stat-value" style="color: #fbbf24;">{{ (summary.type_counts.touching + summary.type_counts.overlapping) if (summary and summary.type_counts) else 0 }}</div>
+                <div class="stat-meta">Multi-peak coalesce</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-content">
+                <div class="stat-label">Dense Clusters / Irregular</div>
+                <div class="stat-value" style="color: #f87171;">{{ (summary.type_counts.cluster + summary.type_counts.irregular) if (summary and summary.type_counts) else 0 }}</div>
+                <div class="stat-meta">Complex topologies</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-content">
+                <div class="stat-label">Proposed Splits</div>
+                <div class="stat-value" style="color: #38bdf8;">{{ summary.candidate_splits_count }}</div>
+                <div class="stat-meta">Candidate separations</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Visual Multi-View Comparison Matrix (Section 7F) -->
+    <div class="card" style="margin-bottom: 18px;">
+        <div class="card-header">
+            <h2 class="card-title" style="font-size: 16px;">
+                <span>🔬</span> Side-by-Side Forensic Evidence &amp; Segmentation Comparison
+            </h2>
+            <div style="font-size: 12px; color: var(--text-muted);">
+                Calibration:
+                {% if summary.is_calibrated %}
+                    <span style="color: #34d399; font-weight: 600;">Calibrated Metric ({{ '%.4f'|format(summary.mm_per_pixel) }} mm/px)</span>
+                {% else %}
+                    <span style="color: #fbbf24; font-weight: 600;">Uncalibrated (Pixel Units Only)</span>
+                {% endif %}
+            </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px;">
+            <!-- View A: Original Evidence -->
+            <div style="background: #090d16; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span style="font-size: 12px; font-weight: 700; color: var(--text-primary);">A. Original Evidence</span>
+                    <span class="badge" style="background: rgba(16,185,129,0.15); color: #34d399;">Unmodified</span>
+                </div>
+                <div style="height: 260px; display: flex; align-items: center; justify-content: center; overflow: hidden; background: #000; border-radius: 4px;">
+                    {% if active_image %}
+                        <img src="{{ url_for('serve_original_upload', filename=active_image.filename) }}"
+                             alt="Original Evidence"
+                             style="max-width: 100%; max-height: 100%; object-fit: contain;">
+                    {% else %}
+                        <span style="color: var(--text-muted); font-size: 12px;">Image source not loaded</span>
+                    {% endif %}
+                </div>
+                <div style="margin-top: 6px; font-size: 11px; color: var(--text-secondary); text-align: center;">
+                    Original forensic photograph preserved bit-for-bit
+                </div>
+            </div>
+
+            <!-- View B: Connected Component Detection -->
+            <div style="background: #090d16; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span style="font-size: 12px; font-weight: 700; color: var(--text-primary);">B. Detection Overlay</span>
+                    <span class="badge" style="background: rgba(56,189,248,0.15); color: #38bdf8;">Connected Regions</span>
+                </div>
+                <div style="height: 260px; display: flex; align-items: center; justify-content: center; overflow: hidden; background: #000; border-radius: 4px;">
+                    {% if summary.detection_overlay_b64 %}
+                        <img src="{{ summary.detection_overlay_b64 }}"
+                             alt="Detection Overlay"
+                             style="max-width: 100%; max-height: 100%; object-fit: contain;">
+                    {% endif %}
+                </div>
+                <div style="margin-top: 6px; font-size: 11px; color: var(--text-secondary); text-align: center;">
+                    Green = Isolated, Amber = Touching, Orange = Overlapping, Gray = Indeterminate
+                </div>
+            </div>
+
+            <!-- View C: Proposed Watershed Segmentation -->
+            <div style="background: #090d16; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span style="font-size: 12px; font-weight: 700; color: var(--text-primary);">C. Proposed Segmentation</span>
+                    <span class="badge" style="background: rgba(251,191,36,0.15); color: #fbbf24;">Candidate Cut Lines</span>
+                </div>
+                <div style="height: 260px; display: flex; align-items: center; justify-content: center; overflow: hidden; background: #000; border-radius: 4px;">
+                    {% if summary.segmentation_overlay_b64 %}
+                        <img src="{{ summary.segmentation_overlay_b64 }}"
+                             alt="Proposed Segmentation Overlay"
+                             style="max-width: 100%; max-height: 100%; object-fit: contain;">
+                    {% endif %}
+                </div>
+                <div style="margin-top: 6px; font-size: 11px; color: var(--text-secondary); text-align: center;">
+                    Yellow cut lines indicate proposed watershed partitions
+                </div>
+            </div>
+
+            <!-- View D: Examiner Review Overlay -->
+            <div style="background: #090d16; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span style="font-size: 12px; font-weight: 700; color: var(--text-primary);">D. Examiner Review Overlay</span>
+                    <span class="badge" style="background: rgba(192,132,252,0.15); color: #c084fc;">Approved vs. Merged</span>
+                </div>
+                <div style="height: 260px; display: flex; align-items: center; justify-content: center; overflow: hidden; background: #000; border-radius: 4px;">
+                    {% if summary.review_overlay_b64 %}
+                        <img src="{{ summary.review_overlay_b64 }}"
+                             alt="Examiner Review Overlay"
+                             style="max-width: 100%; max-height: 100%; object-fit: contain;">
+                    {% endif %}
+                </div>
+                <div style="margin-top: 6px; font-size: 11px; color: var(--text-secondary); text-align: center;">
+                    Emerald = Accepted child stains; Amber = Rejected (retained as merged)
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Connected Regions & Segmentation Review Table (Section 7D & 7E) -->
+    <div class="card" style="margin-bottom: 18px;">
+        <div class="card-header">
+            <h2 class="card-title" style="font-size: 16px;">
+                <span>📋</span> Connected Regions &amp; Candidate Subdivisions Review
+            </h2>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <span class="badge" style="background: rgba(56,189,248,0.15); color: #38bdf8;">
+                    {{ regions|length }} Components Analyzed
+                </span>
+            </div>
+        </div>
+
+        {% if regions %}
+            <form method="POST" action="{% if active_analysis %}{{ url_for('overlap_analysis_review_route', case_id=case.case_id, analysis_id=active_analysis.analysis_id) }}{% else %}#{% endif %}">
+                <div class="table-responsive">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Region ID</th>
+                                <th>Classification</th>
+                                <th>Parent Area</th>
+                                <th>Aspect Ratio</th>
+                                <th>Solidity</th>
+                                <th>Peaks</th>
+                                <th>Status</th>
+                                <th>Proposed Subdivisions</th>
+                                <th>Examiner Decision</th>
+                                <th>Examiner Notes</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for reg in regions %}
+                                <tr>
+                                    <td>
+                                        <span class="case-id-badge">{{ reg.region_id }}</span>
+                                    </td>
+                                    <td>
+                                        <strong>{{ reg.region_type }}</strong>
+                                        {% if reg.uncertainty_notes %}
+                                            <div style="color: #fcd34d; font-size: 10.5px; margin-top: 2px;">
+                                                ⚠️ {{ reg.uncertainty_notes|join('; ') }}
+                                            </div>
+                                        {% endif %}
+                                    </td>
+                                    <td style="font-family: var(--font-mono);">
+                                        {% if summary.is_calibrated and reg.parent_area_mm2 is not none %}
+                                            <span style="color: #34d399;">{{ reg.parent_area_mm2 }} mm²</span>
+                                            <div style="color: var(--text-muted); font-size: 11px;">({{ reg.parent_area_px2 }} px²)</div>
+                                        {% else %}
+                                            <span>{{ reg.parent_area_px2 }} px²</span>
+                                        {% endif %}
+                                    </td>
+                                    <td style="font-family: var(--font-mono);">{{ reg.parent_aspect_ratio }}</td>
+                                    <td style="font-family: var(--font-mono);">{{ reg.parent_solidity }}</td>
+                                    <td style="font-family: var(--font-mono); text-align: center;">
+                                        <strong>{{ reg.peak_count }}</strong>
+                                        <span style="color: var(--text-muted); font-size: 11px;">({{ reg.notch_count }} notches)</span>
+                                    </td>
+                                    <td>
+                                        {% if reg.segmentation_status == 'Clearly Separated' %}
+                                            <span style="color: #34d399; font-weight: 600;">Clearly Separated</span>
+                                        {% elif reg.segmentation_status == 'Candidate Separation' %}
+                                            <span style="color: #38bdf8; font-weight: 600;">Candidate Split</span>
+                                        {% elif reg.segmentation_status == 'Accepted Segmentation' %}
+                                            <span style="color: #34d399; font-weight: 700;">Accepted</span>
+                                        {% elif reg.segmentation_status == 'Rejected Segmentation' %}
+                                            <span style="color: #f87171; font-weight: 700;">Rejected (Merged)</span>
+                                        {% else %}
+                                            <span style="color: #fcd34d; font-weight: 600;">{{ reg.segmentation_status }}</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if reg.candidate_children %}
+                                            <div style="font-size: 11.5px;">
+                                                <strong>{{ reg.candidate_children|length }} child stains:</strong>
+                                                {% for ch in reg.candidate_children %}
+                                                    <div style="font-family: var(--font-mono); color: var(--text-secondary); margin-top: 2px;">
+                                                        • <strong>{{ ch.child_id }}</strong>:
+                                                        {% if summary.is_calibrated and ch.area_mm2 is not none %}
+                                                            {{ ch.area_mm2 }} mm² (AR={{ ch.aspect_ratio }})
+                                                        {% else %}
+                                                            {{ ch.area_px2 }} px² (AR={{ ch.aspect_ratio }})
+                                                        {% endif %}
+                                                    </div>
+                                                {% endfor %}
+                                                <div style="color: var(--text-muted); font-size: 10.5px; margin-top: 3px;">
+                                                    Area Conservation: {{ '%.1f'|format(reg.area_conservation_ratio * 100) }}% (&Delta;A={{ reg.area_conservation_diff_px2 }} px²)
+                                                </div>
+                                            </div>
+                                        {% else %}
+                                            <span style="color: var(--text-muted); font-size: 12px;">Single unified contour (no split proposed)</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <select name="decision_{{ reg.region_id }}" class="form-control" style="font-size: 12px; padding: 4px 8px; width: 140px;">
+                                            <option value="Accepted" {% if reg.examiner_decision == 'Accepted' or (reg.region_type == 'Isolated Stain' and reg.examiner_decision != 'Rejected') %}selected{% endif %}>
+                                                ✓ Accept Split
+                                            </option>
+                                            <option value="Rejected" {% if reg.examiner_decision == 'Rejected' %}selected{% endif %}>
+                                                ✗ Reject (Keep Merged)
+                                            </option>
+                                            <option value="Indeterminate" {% if reg.examiner_decision == 'Indeterminate' or reg.region_type == 'Uncertain / Indeterminate Region' %}selected{% endif %}>
+                                                ? Indeterminate
+                                            </option>
+                                        </select>
+                                    </td>
+                                    <td>
+                                        <input type="text" name="notes_{{ reg.region_id }}" class="form-control"
+                                               placeholder="Examiner rationale..."
+                                               value="{{ reg.examiner_notes }}"
+                                               style="font-size: 12px; padding: 4px 8px; width: 160px;">
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+
+                {% if active_analysis %}
+                    <div style="margin-top: 16px; padding: 14px; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+                        <div style="display: flex; gap: 14px; align-items: center; flex-wrap: wrap;">
+                            <div>
+                                <label class="form-label" style="font-size: 12px; margin-bottom: 2px;">Duty Examiner Name:</label>
+                                <input type="text" name="examiner_name" class="form-control"
+                                       value="{{ active_analysis.examiner_name or case.examiner or 'Duty Examiner' }}"
+                                       style="width: 200px; font-size: 13px;">
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 8px; margin-top: 16px;">
+                                <input type="checkbox" name="save_as_new_revision" id="save_as_new_revision" value="true">
+                                <label for="save_as_new_revision" style="font-size: 12.5px; color: var(--text-primary); cursor: pointer;">
+                                    Save as New Non-Destructive Revision (R{{ active_analysis.revision_number + 1 }})
+                                </label>
+                            </div>
+                        </div>
+
+                        <div>
+                            <button type="submit" class="btn btn-primary">
+                                <span>💾</span> Save Examiner Decisions &amp; Sign Off
+                            </button>
+                        </div>
+                    </div>
+                {% else %}
+                    <div style="margin-top: 14px; padding: 10px; background: rgba(56,189,248,0.12); border: 1px solid rgba(56,189,248,0.3); border-radius: 4px; font-size: 12.5px; color: #38bdf8;">
+                        💡 Run the analysis using the <strong>Detect &amp; Segment Overlaps</strong> button above to save and record persistent examiner review decisions.
+                    </div>
+                {% endif %}
+            </form>
+        {% endif %}
+    </div>
+
+    <!-- Mandatory Scientific Limitations Panel -->
+    <div class="card" style="border-left: 4px solid #f87171;">
+        <h3 style="font-size: 14px; font-weight: 700; color: #f87171; margin-bottom: 8px;">
+            ⚠️ Mandatory Scientific Limitations on Overlapping Stain Reconstruction
+        </h3>
+        <ul style="margin: 0; padding-left: 20px; font-size: 12.5px; color: var(--text-secondary); line-height: 1.6;">
+            <li><strong>Examiner-Assisted Decision Support Only:</strong> Candidate watershed cut lines and child stain boundaries are preliminary mathematical suggestions requiring visual verification.</li>
+            <li><strong>Absence of 3D Temporal Deposition Evidence:</strong> 2D photograph segmentation cannot determine droplet deposition order or vertical layering (which stain struck first/second) without macroscopic drying rims, differential clotting, or biochemical analysis.</li>
+            <li><strong>Merged Region Integrity:</strong> Merged stains with unresolved boundaries MUST NOT be used for trigonometric impact angle back-projection or 3D trajectory convergence.</li>
+            <li><strong>Area Conservation &amp; Edge Disparity:</strong> Discrepancies between parent contour area and child areas due to boundary erosion are explicitly recorded and tracked.</li>
+        </ul>
+    </div>
+{% else %}
+    <div class="card" style="text-align: center; padding: 48px 24px;">
+        <div style="font-size: 40px; margin-bottom: 12px;">🧩</div>
+        <h3 style="font-size: 18px; color: var(--text-primary); margin-bottom: 8px;">No Overlap Analysis Computed for this Case Yet</h3>
+        <p style="color: var(--text-secondary); font-size: 13.5px; max-width: 600px; margin: 0 auto 20px auto;">
+            Select an evidence image or load a controlled reference sample from the control panel above to perform connected-component topology detection and marker-controlled watershed segmentation.
+        </p>
+    </div>
+{% endif %}
+
+{% endblock %}

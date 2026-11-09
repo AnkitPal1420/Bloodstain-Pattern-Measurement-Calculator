@@ -1078,6 +1078,102 @@ def _build_section_pattern_analysis(
     )
 
 
+def _build_section_overlap_analysis(
+    story: List[Any],
+    styles: Dict[str, ParagraphStyle],
+    overlap_analyses: Optional[List[Dict[str, Any]]],
+) -> None:
+    """
+    Section 9C: Overlapping & Complex Bloodstain Analysis (Phase 5.2).
+    Documents connected component detection, marker-controlled watershed candidate separations,
+    examiner review decisions (accepted, rejected, indeterminate), and area conservation.
+    """
+    if not overlap_analyses:
+        return
+
+    story.append(Spacer(1, 4 * mm))
+    story.append(
+        Paragraph(
+            "SECTION 9C — OVERLAPPING & COMPLEX BLOODSTAIN PATTERN ANALYSIS",
+            styles["SectionHeading"],
+        )
+    )
+    story.append(HRFlowable(width="100%", thickness=0.6, color=colors.HexColor("#cbd5e1"), spaceAfter=6))
+
+    story.append(
+        Paragraph(
+            "<b>Methodological Purpose & Separation Governance:</b> Topological distance-transform and "
+            "marker-controlled watershed algorithms identify connected stain regions and propose candidate "
+            "subdivisions. In accordance with forensic standards, merged contours are never automatically declared "
+            "individual stains without visual corroboration; uncertain regions remain preserved as unresolved merged entities.",
+            styles["BodyLeft"],
+        )
+    )
+    story.append(Spacer(1, 3 * mm))
+
+    for oa in overlap_analyses:
+        regions_data: List[Dict[str, Any]] = []
+        try:
+            regions_data = json.loads(oa.get("regions_json", "[]"))
+        except Exception:
+            regions_data = []
+
+        is_cal = bool(oa.get("is_calibrated"))
+        unit_lbl = f"Calibrated Metric ({oa.get('mm_per_pixel'):.4f} mm/px)" if is_cal and oa.get("mm_per_pixel") else "Uncalibrated (Pixel Units Only)"
+
+        meta_rows = [
+            ["Overlap Analysis ID & Revision", f"{oa.get('analysis_id')}  (Revision R{oa.get('revision_number', 1)})"],
+            ["Source Evidence Image ID", f"{oa.get('image_id') or 'N/A'}  ({oa.get('image_filename') or 'No filename'})"],
+            ["Algorithm & Version", f"{oa.get('algorithm_name', 'Marker Watershed')} {oa.get('algorithm_version', 'v5.2')}"],
+            ["Calibration & Unit Discipline", f"[Examiner Supplied] {unit_lbl}"],
+            ["Total Connected Regions Detected", f"[Automatically Measured] {len(regions_data)} regions"],
+            ["Review Status & Examiner", f"[{oa.get('review_status', 'Preliminary')}] — {oa.get('examiner_name') or 'Duty Examiner'}"],
+            ["Examiner Examination Notes", f"{oa.get('examiner_notes') or 'No specific notes recorded.'}"],
+        ]
+        meta_tbl = Table(meta_rows, colWidths=[58 * mm, 116 * mm])
+        meta_tbl.setStyle(_kv_table_style())
+        story.append(meta_tbl)
+        story.append(Spacer(1, 3 * mm))
+
+        if regions_data:
+            story.append(
+                Paragraph(
+                    f"<b>Connected Region Classifications & Segmentation Candidates ({oa.get('analysis_id')}):</b>",
+                    styles["SubHeading"],
+                )
+            )
+            r_rows: List[List[Any]] = [
+                ["Region ID", "Classification", "Area", "Aspect Ratio", "Solidity", "Peaks", "Status", "Decision"]
+            ]
+            for r in regions_data[:12]:
+                area_str = f"{r.get('parent_area_mm2')} mm²" if is_cal and r.get("parent_area_mm2") is not None else f"{r.get('parent_area_px2')} px²"
+                r_rows.append(
+                    [
+                        r.get("region_id", "REG"),
+                        r.get("region_type", "Unknown"),
+                        area_str,
+                        f"{r.get('parent_aspect_ratio', 1.0):.2f}",
+                        f"{r.get('parent_solidity', 1.0):.2f}",
+                        str(r.get("peak_count", 1)),
+                        r.get("segmentation_status", "Unresolved"),
+                        r.get("examiner_decision", "Pending"),
+                    ]
+                )
+            r_tbl = Table(r_rows, colWidths=[20 * mm, 34 * mm, 26 * mm, 20 * mm, 16 * mm, 14 * mm, 26 * mm, 18 * mm], repeatRows=1)
+            r_tbl.setStyle(_standard_table_style())
+            story.append(r_tbl)
+            story.append(Spacer(1, 3 * mm))
+
+    story.append(
+        Paragraph(
+            "<b>Overlapping Analysis Limitations Notice:</b> 2D photograph segmentation cannot establish droplet "
+            "temporal deposition sequence or 3D physical vertical layering without independent microscopic or biological "
+            "indicators. Merged stain regions with unresolved boundaries must not be used for individual trajectory reconstruction.",
+            styles["NoticeBox"],
+        )
+    )
+
+
 def _build_section_10_11_12_closing(
     story: List[Any],
     styles: Dict[str, ParagraphStyle],
@@ -1219,6 +1315,7 @@ def _compile_pdf_document(
     rec_stains: List[Dict[str, Any]],
     rec_result: Optional[Dict[str, Any]],
     pattern_analyses: Optional[List[Dict[str, Any]]] = None,
+    overlap_analyses: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Build the 12-section PDF document into a temporary file, validate the PDF header/EOF,
@@ -1261,6 +1358,7 @@ def _compile_pdf_document(
     _build_section_5_individual_measurements_table(story, styles, measurements)
     _build_section_6_7_8_9_trajectory_sections(story, styles, reconstruction, rec_stains, rec_result, fig_counter)
     _build_section_pattern_analysis(story, styles, pattern_analyses)
+    _build_section_overlap_analysis(story, styles, overlap_analyses)
     _build_section_10_11_12_closing(story, styles, meta, measurements, reconstruction, rec_result, image_hashes)
 
     try:
@@ -1571,6 +1669,7 @@ def generate_case_report(
     }
 
     pattern_analyses = database.get_pattern_analyses_for_case(case["case_id"])
+    overlap_analyses = database.get_overlap_analyses_for_case(case["case_id"])
 
     return _compile_pdf_document(
         output_dir=output_dir,
@@ -1583,4 +1682,5 @@ def generate_case_report(
         rec_stains=rec_stains,
         rec_result=rec_result,
         pattern_analyses=pattern_analyses,
+        overlap_analyses=overlap_analyses,
     )

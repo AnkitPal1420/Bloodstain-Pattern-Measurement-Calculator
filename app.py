@@ -27,6 +27,7 @@ from werkzeug.utils import secure_filename
 
 import database
 import image_processing
+import overlap_analysis
 import pattern_analysis
 import report_generator
 import trajectory
@@ -34,6 +35,7 @@ import trajectory_integration
 import trajectory_visualization
 from calculator import InvalidMeasurementError, calculate_impact_angle
 from image_processing import ImageProcessingError
+from overlap_analysis import OverlapAnalysisError
 from pattern_analysis import PatternAnalysisError
 from report_generator import ReportGenerationError
 from trajectory import StainTrajectoryInput, TrajectoryError
@@ -1759,6 +1761,398 @@ def pattern_analysis_review_route(case_id: str, analysis_id: str):
             analysis_id=updated["analysis_id"],
         )
     )
+
+
+# ===========================================================================
+# Phase 5.2 — Advanced Overlapping & Complex Bloodstain Analysis Routes
+# ===========================================================================
+
+
+@app.route("/overlap-analysis", methods=["GET"])
+def overlap_analysis_index():
+    """Entry redirector: routes examiner to the active forensic case overlap workspace."""
+    all_cases = database.get_all_cases()
+    target_cid = all_cases[0]["case_id"] if all_cases else "BPA-2026-0101"
+    return redirect(url_for("overlap_analysis_workspace", case_id=target_cid))
+
+
+@app.route("/overlap-analysis/<case_id>", methods=["GET"])
+def overlap_analysis_workspace(case_id: str):
+    """
+    Render the Phase 5.2 Overlapping & Complex Bloodstain Pattern Analysis Workspace.
+    Provides interactive side-by-side comparison, connected region inspection,
+    watershed candidate separation review, and examiner approval controls.
+    """
+    case = database.get_case_by_id(case_id)
+    if not case:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": f"Case '{case_id}' not found."}), 404
+        abort(404)
+
+    all_cases = database.get_all_cases()
+    evidence_items = database.get_evidence_for_case(case_id)
+    case_images = database.get_images_for_case(case_id)
+    analyses = database.get_overlap_analyses_for_case(case_id)
+
+    selected_analysis_id = request.args.get("analysis_id", "").strip()
+    selected_image_id = request.args.get("image_id", "").strip()
+
+    active_analysis = None
+    if selected_analysis_id:
+        cand = database.get_overlap_analysis_by_id(selected_analysis_id)
+        if cand and cand["case_id"] == case_id:
+            active_analysis = cand
+        elif cand and cand["case_id"] != case_id:
+            abort(403)
+    elif analyses and not selected_image_id:
+        active_analysis = analyses[0]
+
+    active_image = None
+    if active_analysis and active_analysis.get("image_id"):
+        active_image = database.get_image_by_id(active_analysis["image_id"])
+    elif selected_image_id:
+        cand_img = database.get_image_by_id(selected_image_id)
+        if cand_img and (not cand_img.get("case_id") or cand_img["case_id"] == case_id):
+            active_image = cand_img
+        elif cand_img and cand_img.get("case_id") != case_id:
+            abort(403)
+    elif case_images:
+        active_image = case_images[0]
+
+    parsed_result = None
+    if active_analysis:
+        try:
+            parsed_result = {
+                "summary": json.loads(active_analysis.get("summary_json", "{}")),
+                "regions": json.loads(active_analysis.get("regions_json", "[]")),
+                "accepted_stains": json.loads(active_analysis.get("accepted_stains_json", "[]")) if active_analysis.get("accepted_stains_json") else [],
+                "parameters": json.loads(active_analysis.get("parameters_json", "{}")),
+            }
+        except Exception:
+            parsed_result = None
+    elif active_image and os.path.isfile(active_image.get("filepath", "")):
+        try:
+            is_cal = bool(active_image.get("is_calibrated") == 1 and active_image.get("scale_factor"))
+            mm_px = float(active_image["scale_factor"]) if is_cal else None
+            auto_res = overlap_analysis.detect_and_segment_complex_regions(
+                image_source=active_image["filepath"],
+                is_calibrated=is_cal,
+                mm_per_pixel=mm_px,
+            )
+            parsed_result = {
+                "summary": auto_res,
+                "regions": auto_res["regions"],
+                "accepted_stains": [],
+                "parameters": {
+                    "threshold_method": "otsu",
+                    "min_area_px": 20.0,
+                    "min_peak_distance_px": 8.0,
+                    "peak_threshold_ratio": 0.35,
+                },
+                "detection_overlay_b64": auto_res["detection_overlay_b64"],
+                "segmentation_overlay_b64": auto_res["segmentation_overlay_b64"],
+                "review_overlay_b64": auto_res["review_overlay_b64"],
+            }
+        except Exception as exc:
+            flash(f"Complex stain detection notice: {exc}", "warning")
+
+    if request.headers.get("Accept") == "application/json":
+        return jsonify(
+            {
+                "status": "ok",
+                "case": case,
+                "active_analysis": active_analysis,
+                "active_image": active_image,
+                "analysis_data": parsed_result,
+                "analyses_count": len(analyses),
+            }
+        ), 200
+
+    return render_template(
+        "overlap_analysis.html",
+        active_page="overlap_analysis",
+        case=case,
+        all_cases=all_cases,
+        evidence_items=evidence_items,
+        case_images=case_images,
+        analyses=analyses,
+        active_analysis=active_analysis,
+        active_image=active_image,
+        analysis_data=parsed_result,
+    )
+
+
+@app.route("/overlap-analysis/<case_id>/analyze", methods=["POST"])
+def overlap_analysis_run_route(case_id: str):
+    """
+    Execute complex connected-component detection and marker-controlled watershed
+    segmentation on an evidence image and persist a new non-overwriting revision.
+    """
+    case = database.get_case_by_id(case_id)
+    if not case:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": f"Case '{case_id}' not found."}), 404
+        abort(404)
+
+    image_id = request.form.get("image_id", "").strip()
+    evidence_id = request.form.get("evidence_id", "").strip() or None
+    sample_name = request.form.get("sample_name", "").strip()
+    threshold_method = request.form.get("threshold_method", "otsu").strip().lower()
+
+    try:
+        min_area_px = max(float(request.form.get("min_area_px", "20.0")), 5.0)
+    except ValueError:
+        min_area_px = 20.0
+
+    try:
+        min_peak_dist = max(float(request.form.get("min_peak_distance_px", "8.0")), 3.0)
+    except ValueError:
+        min_peak_dist = 8.0
+
+    try:
+        peak_ratio = min(max(float(request.form.get("peak_threshold_ratio", "0.35")), 0.15), 0.85)
+    except ValueError:
+        peak_ratio = 0.35
+
+    # Allow loading controlled synthetic/sample reference images
+    safe_sample = secure_filename(sample_name) if sample_name else ""
+    if safe_sample and not image_id:
+        sample_src = os.path.join(SAMPLE_IMAGES_DIR, safe_sample)
+        if os.path.isfile(sample_src) and image_processing.is_allowed_file(safe_sample):
+            new_img_id = database.generate_image_id()
+            ext = safe_sample.rsplit(".", 1)[1].lower()
+            stored_filename = f"{new_img_id}.{ext}"
+            stored_path = os.path.join(UPLOAD_ORIGINAL_DIR, stored_filename)
+            shutil.copyfile(sample_src, stored_path)
+            bgr = image_processing.load_and_validate_image(stored_path)
+            h_px, w_px = bgr.shape[:2]
+            is_cal_sample = 1 if "calibrated" in safe_sample else 0
+            scale_sample = 0.25 if is_cal_sample else 1.0
+            database.create_evidence_image(
+                image_id=new_img_id,
+                case_id=case_id,
+                evidence_id=evidence_id,
+                filename=stored_filename,
+                filepath=stored_path,
+                original_filename=safe_sample,
+                file_size=os.path.getsize(stored_path),
+                mime_type="image/png",
+                width_px=w_px,
+                height_px=h_px,
+                scale_factor=scale_sample,
+                is_calibrated=is_cal_sample,
+            )
+            image_id = new_img_id
+
+    if not image_id:
+        msg = "Please select an evidence photograph or reference sample to analyze for overlapping stains."
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": msg}), 400
+        flash(msg, "danger")
+        return redirect(url_for("overlap_analysis_workspace", case_id=case_id))
+
+    img_rec = database.get_image_by_id(image_id)
+    if not img_rec:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": f"Evidence image '{image_id}' not found."}), 404
+        flash(f"Evidence image '{image_id}' not found.", "danger")
+        return redirect(url_for("overlap_analysis_workspace", case_id=case_id))
+
+    if img_rec.get("case_id") and img_rec["case_id"] != case_id:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": "Image belongs to a different forensic case."}), 403
+        abort(403)
+
+    try:
+        is_cal = bool(img_rec.get("is_calibrated") == 1 and img_rec.get("scale_factor"))
+        mm_px = float(img_rec["scale_factor"]) if is_cal else None
+
+        detection_res = overlap_analysis.detect_and_segment_complex_regions(
+            image_source=img_rec["filepath"],
+            is_calibrated=is_cal,
+            mm_per_pixel=mm_px,
+            threshold_method=threshold_method,
+            min_area_px=min_area_px,
+            min_peak_distance_px=min_peak_dist,
+            peak_threshold_ratio=peak_ratio,
+        )
+
+        params = {
+            "threshold_method": threshold_method,
+            "min_area_px": min_area_px,
+            "min_peak_distance_px": min_peak_dist,
+            "peak_threshold_ratio": peak_ratio,
+        }
+
+        saved_rec = database.create_overlap_analysis_record(
+            case_id=case_id,
+            evidence_id=evidence_id or img_rec.get("evidence_id"),
+            image_id=image_id,
+            algorithm_name="Distance-Transform Marker-Controlled Watershed",
+            algorithm_version=overlap_analysis.OVERLAP_ENGINE_VERSION,
+            is_calibrated=is_cal,
+            mm_per_pixel=mm_px,
+            parameters_json=json.dumps(params),
+            summary_json=json.dumps(detection_res),
+            regions_json=json.dumps(detection_res["regions"]),
+            review_status="Preliminary — Examiner Review Required",
+            examiner_name=case.get("examiner"),
+        )
+
+        if request.headers.get("Accept") == "application/json":
+            return jsonify(
+                {
+                    "status": "ok",
+                    "analysis": saved_rec,
+                    "detection": detection_res,
+                }
+            ), 201
+
+        flash(
+            f"Overlap Analysis {saved_rec['analysis_id']} (Revision R{saved_rec['revision_number']}) computed. "
+            f"Detected {detection_res['total_regions']} connected regions ({detection_res['candidate_splits_count']} candidate splits).",
+            "success",
+        )
+        return redirect(
+            url_for(
+                "overlap_analysis_workspace",
+                case_id=case_id,
+                analysis_id=saved_rec["analysis_id"],
+            )
+        )
+    except (OverlapAnalysisError, ImageProcessingError) as err:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": str(err)}), 400
+        flash(f"Complex Stain Analysis Error: {err}", "danger")
+        return redirect(url_for("overlap_analysis_workspace", case_id=case_id))
+
+
+@app.route("/overlap-analysis/<case_id>/review/<analysis_id>", methods=["POST"])
+def overlap_analysis_review_route(case_id: str, analysis_id: str):
+    """
+    Process examiner decisions on proposed segmentations (accept, reject, indeterminate)
+    and persist decisions either in-place or as a new revision.
+    """
+    case = database.get_case_by_id(case_id)
+    if not case:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": f"Case '{case_id}' not found."}), 404
+        abort(404)
+
+    existing = database.get_overlap_analysis_by_id(analysis_id)
+    if not existing:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": f"Analysis '{analysis_id}' not found."}), 404
+        abort(404)
+
+    if existing["case_id"] != case_id:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": "Unauthorized cross-case access."}), 403
+        abort(403)
+
+    examiner_name = request.form.get("examiner_name", "").strip() or case.get("examiner")
+    examiner_notes = request.form.get("examiner_notes", "").strip()
+    save_as_new_revision = request.form.get("save_as_new_revision") == "true"
+
+    # Build review actions dict from form submissions
+    review_actions: Dict[str, Dict[str, Any]] = {}
+    regions_existing = json.loads(existing["regions_json"])
+    for r in regions_existing:
+        rid = r["region_id"]
+        dec_key = f"decision_{rid}"
+        notes_key = f"notes_{rid}"
+        if dec_key in request.form:
+            review_actions[rid] = {
+                "decision": request.form.get(dec_key, "Pending").strip(),
+                "notes": request.form.get(notes_key, "").strip(),
+            }
+
+    # Also handle single-region quick button submits (e.g. single_reg_id, single_decision)
+    single_reg_id = request.form.get("single_region_id", "").strip()
+    single_dec = request.form.get("single_decision", "").strip()
+    if single_reg_id and single_dec:
+        review_actions[single_reg_id] = {
+            "decision": single_dec,
+            "notes": request.form.get("single_notes", "").strip(),
+        }
+
+    # Reconstruct original image path for overlay refresh
+    analysis_dict = {
+        "regions": regions_existing,
+        "is_calibrated": bool(existing.get("is_calibrated")),
+        "mm_per_pixel": existing.get("mm_per_pixel"),
+        "measurement_unit": "mm" if existing.get("is_calibrated") else "px",
+        "examiner_name": examiner_name,
+        "examiner_notes": examiner_notes,
+    }
+    img_rec = database.get_image_by_id(existing["image_id"]) if existing.get("image_id") else None
+    if img_rec and img_rec.get("filepath"):
+        analysis_dict["original_image_path"] = img_rec["filepath"]
+
+    reviewed_result = overlap_analysis.apply_examiner_review_actions(
+        analysis_record=analysis_dict,
+        review_actions=review_actions,
+        examiner_name=examiner_name,
+        examiner_notes=examiner_notes,
+    )
+
+    action_type = "Segmentation Accepted"
+    if any(a.get("decision") == "Rejected" for a in review_actions.values()):
+        action_type = "Segmentation Rejected"
+    elif any(a.get("decision") == "Indeterminate" for a in review_actions.values()):
+        action_type = "Region Marked Indeterminate"
+
+    if save_as_new_revision:
+        updated = database.create_overlap_analysis_record(
+            case_id=case_id,
+            evidence_id=existing.get("evidence_id"),
+            image_id=existing.get("image_id"),
+            algorithm_name=existing["algorithm_name"],
+            algorithm_version=existing["algorithm_version"],
+            is_calibrated=bool(existing.get("is_calibrated")),
+            mm_per_pixel=existing.get("mm_per_pixel"),
+            parameters_json=existing["parameters_json"],
+            summary_json=json.dumps(reviewed_result),
+            regions_json=json.dumps(reviewed_result["regions"]),
+            accepted_stains_json=json.dumps(reviewed_result["accepted_individual_stains"]),
+            review_status="Examiner Reviewed",
+            examiner_name=examiner_name,
+            examiner_notes=examiner_notes,
+        )
+    else:
+        updated = database.update_overlap_analysis_review(
+            analysis_id=analysis_id,
+            regions_json=json.dumps(reviewed_result["regions"]),
+            accepted_stains_json=json.dumps(reviewed_result["accepted_individual_stains"]),
+            summary_json=json.dumps(reviewed_result),
+            review_status="Examiner Reviewed",
+            examiner_name=examiner_name,
+            examiner_notes=examiner_notes,
+            action_type=action_type,
+        )
+
+    if request.headers.get("Accept") == "application/json":
+        return jsonify(
+            {
+                "status": "ok",
+                "analysis": updated,
+                "reviewed": reviewed_result,
+            }
+        ), 200
+
+    flash(
+        f"Examiner review decisions recorded for {updated['analysis_id']} "
+        f"({reviewed_result['accepted_stains_count']} confirmed stains, {reviewed_result['unresolved_regions_count']} unresolved).",
+        "success",
+    )
+    return redirect(
+        url_for(
+            "overlap_analysis_workspace",
+            case_id=case_id,
+            analysis_id=updated["analysis_id"],
+        )
+    )
+
 
 
 if __name__ == "__main__":
