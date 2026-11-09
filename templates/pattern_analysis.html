@@ -1,0 +1,733 @@
+{% extends "base.html" %}
+
+{% block title %}Pattern Classification &amp; Decision Support — {{ case.case_id }}{% endblock %}
+{% block breadcrumb %}Forensic Workspaces / Pattern Analysis / {{ case.case_id }}{% endblock %}
+
+{% block content %}
+<!-- Top Header & Mandatory Decision-Support Notice -->
+<div class="card" style="margin-bottom: 18px; border-left: 4px solid #c084fc;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 14px;">
+        <div>
+            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex-wrap: wrap;">
+                <span class="case-id-badge">{{ case.case_id }}</span>
+                <span class="badge" style="background-color: rgba(192,132,252,0.16); color: #c084fc; border: 1px solid rgba(192,132,252,0.35);">
+                    Phase 5.1 — Examiner-Assisted Analytical Decision Support
+                </span>
+                <span class="badge" style="background-color: rgba(245,158,11,0.16); color: #fcd34d; border: 1px solid rgba(245,158,11,0.35);">
+                    Experimental Rule-Based Engine
+                </span>
+            </div>
+            <h1 class="card-title" style="font-size: 19px;">
+                <span>🧬</span> Bloodstain Pattern Classification &amp; Morphological Decision Support
+            </h1>
+            <p style="color: var(--text-secondary); font-size: 13px; margin-top: 4px; max-width: 920px;">
+                Systematically extract quantitative bloodstain morphology, record independent examiner observations, and evaluate candidate pattern categories.
+                <strong style="color: #fcd34d;">This module never automatically declares a definitive deposition mechanism, impact velocity, or event sequence from image appearance alone.</strong>
+            </p>
+        </div>
+
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <a href="{{ url_for('case_detail', case_id=case.case_id) }}" class="btn btn-secondary btn-sm">
+                📁 Case File
+            </a>
+            <a href="{{ url_for('measurement_workspace') }}?case_id={{ case.case_id }}" class="btn btn-secondary btn-sm">
+                📐 Measurement Lab
+            </a>
+            <a href="{{ url_for('reconstruction_workspace', case_id=case.case_id) }}" class="btn btn-secondary btn-sm">
+                🧭 3D Reconstruction
+            </a>
+            <form method="POST" action="{{ url_for('generate_case_report_route', case_id=case.case_id) }}" style="display: inline;">
+                <input type="hidden" name="report_status" value="DRAFT">
+                <button type="submit" class="btn btn-primary btn-sm">
+                    📄 Export Case PDF Report
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Provenance Legend Bar -->
+    <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-subtle); display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 11.5px;">
+        <span style="color: var(--text-muted); font-weight: 700; text-transform: uppercase;">Provenance Labels:</span>
+        <span class="badge" style="background: rgba(56,189,248,0.15); color: #38bdf8; border: 1px solid rgba(56,189,248,0.35);">
+            [Automatically Measured] — Computed from image contours
+        </span>
+        <span class="badge" style="background: rgba(245,158,11,0.15); color: #fcd34d; border: 1px solid rgba(245,158,11,0.35);">
+            [Examiner Observed] — Visual scene/substrate traits
+        </span>
+        <span class="badge" style="background: rgba(148,163,184,0.15); color: #cbd5e1; border: 1px solid rgba(148,163,184,0.35);">
+            [Examiner Supplied] — Calibration &amp; surface context
+        </span>
+        <span class="badge" style="background: rgba(192,132,252,0.15); color: #c084fc; border: 1px solid rgba(192,132,252,0.35);">
+            [Software Suggested] — Preliminary hypothesis requiring review
+        </span>
+        <span class="badge" style="background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.35);">
+            [Examiner Approved] — Final signed-off conclusion
+        </span>
+    </div>
+</div>
+
+<!-- 1. Case, Evidence Image & Revision Selection Bar -->
+<div class="card" style="margin-bottom: 18px;">
+    <div class="card-header" style="margin-bottom: 12px; padding-bottom: 10px;">
+        <h2 class="card-title" style="font-size: 15px;">
+            <span>🔬</span> 1. Case Evidence Selection &amp; Feature Extraction Trigger
+        </h2>
+        {% if active_analysis %}
+            <span class="case-id-badge">Active Record: {{ active_analysis.analysis_id }} (Rev R{{ active_analysis.revision_number }})</span>
+        {% endif %}
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; align-items: end;">
+        <!-- Case Switcher -->
+        <div>
+            <label style="display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px;">
+                Active Forensic Case:
+            </label>
+            <select class="form-control" onchange="if(this.value) window.location.href=this.value;">
+                {% for c in all_cases %}
+                    <option value="{{ url_for('pattern_analysis_workspace', case_id=c.case_id) }}" {% if c.case_id == case.case_id %}selected{% endif %}>
+                        {{ c.case_id }} — {{ c.title }}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <!-- Run Analysis on Case Image Form -->
+        <form method="POST" action="{{ url_for('pattern_analysis_run_route', case_id=case.case_id) }}" style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 200px;">
+                <label for="image_id" style="display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px;">
+                    Select Case Evidence Photograph:
+                </label>
+                <select name="image_id" id="image_id" class="form-control">
+                    {% if case_images %}
+                        {% for im in case_images %}
+                            <option value="{{ im.image_id }}" {% if active_image and active_image.image_id == im.image_id %}selected{% endif %}>
+                                {{ im.image_id }} — {{ im.original_filename }} ({{ im.width_px }}x{{ im.height_px }} px, {% if im.is_calibrated %}Calibrated {{ '%.4f'|format(im.scale_factor) }} mm/px{% else %}Uncalibrated px{% endif %})
+                            </option>
+                        {% endfor %}
+                    {% else %}
+                        <option value="">-- No images uploaded to case yet --</option>
+                    {% endif %}
+                </select>
+            </div>
+            <button type="submit" class="btn btn-primary" {% if not case_images %}disabled{% endif %}>
+                <span>⚙️</span> Extract Features &amp; Run Analysis
+            </button>
+        </form>
+
+        <!-- Quick-Load Controlled Reference Sample into Case -->
+        <div>
+            <div style="font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px;">
+                Or Load Controlled Reference Sample into {{ case.case_id }}:
+            </div>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                <form method="POST" action="{{ url_for('pattern_analysis_run_route', case_id=case.case_id) }}" style="display: inline;">
+                    <input type="hidden" name="sample_name" value="sample_30deg_oblique.png">
+                    <button type="submit" class="btn btn-secondary btn-sm">🩸 30° Oblique</button>
+                </form>
+                <form method="POST" action="{{ url_for('pattern_analysis_run_route', case_id=case.case_id) }}" style="display: inline;">
+                    <input type="hidden" name="sample_name" value="sample_45deg_calibrated.png">
+                    <button type="submit" class="btn btn-secondary btn-sm">📏 45° Calibrated</button>
+                </form>
+                <form method="POST" action="{{ url_for('pattern_analysis_run_route', case_id=case.case_id) }}" style="display: inline;">
+                    <input type="hidden" name="sample_name" value="sample_90deg_circular.png">
+                    <button type="submit" class="btn btn-secondary btn-sm">⭕ 90° Circular</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    {% if analyses %}
+        <div style="margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border-subtle); display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <span style="font-size: 11.5px; color: var(--text-muted); font-weight: 600;">Saved Examination Revisions ({{ analyses|length }}):</span>
+            {% for pa in analyses %}
+                <a href="{{ url_for('pattern_analysis_workspace', case_id=case.case_id, analysis_id=pa.analysis_id) }}"
+                   class="btn btn-sm {% if active_analysis and active_analysis.analysis_id == pa.analysis_id %}btn-primary{% else %}btn-secondary{% endif %}"
+                   style="font-size: 11px; padding: 4px 10px;">
+                    {{ pa.analysis_id }} ({{ pa.review_status }})
+                </a>
+            {% endfor %}
+        </div>
+    {% endif %}
+</div>
+
+{% if features %}
+<!-- 2 & 3. Original Evidence Image Viewer & Processed Multi-Contour Detection Overlay -->
+<div class="grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 18px; margin-bottom: 18px;">
+    <!-- Panel 2: Unmodified Original Evidence Image -->
+    <div class="card">
+        <div class="card-header">
+            <h2 class="card-title" style="font-size: 15px;">
+                <span>📷</span> 2. Unmodified Original Evidence Photograph
+            </h2>
+            <span class="badge" style="background: rgba(16,185,129,0.15); color: #34d399;">Original File Preserved</span>
+        </div>
+        {% if active_image %}
+            <div style="background: #090d16; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 10px; text-align: center;">
+                <img src="{{ url_for('serve_original_upload', filename=active_image.filename) }}"
+                     alt="Original Evidence {{ active_image.image_id }}"
+                     style="max-width: 100%; max-height: 300px; border-radius: 4px; object-fit: contain;">
+            </div>
+            <div style="margin-top: 10px; font-size: 12px; color: var(--text-secondary); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+                <span><strong>Image ID:</strong> <code>{{ active_image.image_id }}</code> ({{ active_image.original_filename }})</span>
+                <span><strong>Dimensions:</strong> {{ active_image.width_px }} &times; {{ active_image.height_px }} px</span>
+            </div>
+        {% else %}
+            <p style="color: var(--text-muted); font-size: 13px;">Original image reference metadata displayed from saved analysis record.</p>
+        {% endif %}
+    </div>
+
+    <!-- Panel 3: Processed Multi-Contour & Fitted Ellipse Overlay -->
+    <div class="card">
+        <div class="card-header">
+            <h2 class="card-title" style="font-size: 15px;">
+                <span>🔍</span> 3. Processed Detection &amp; Ellipse Fit Overlay
+            </h2>
+            <span class="badge" style="background: rgba(56,189,248,0.15); color: #38bdf8;">[Automatically Measured]</span>
+        </div>
+        {% if features.overlay_b64 %}
+            <div style="background: #090d16; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 10px; text-align: center;">
+                <img src="{{ features.overlay_b64 }}"
+                     alt="Processed Pattern Analysis Overlay"
+                     style="max-width: 100%; max-height: 300px; border-radius: 4px; object-fit: contain;">
+            </div>
+        {% endif %}
+        <div style="margin-top: 10px; font-size: 12px; color: var(--text-secondary); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+            <span><strong>Calibration Status:</strong>
+                {% if features.is_calibrated %}
+                    <span style="color: #34d399; font-weight: 600;">Calibrated ({{ '%.4f'|format(features.mm_per_pixel) }} mm/px)</span>
+                {% else %}
+                    <span style="color: #fcd34d; font-weight: 600;">Uncalibrated (Pixel Units &amp; Dimensionless Ratios Only)</span>
+                {% endif %}
+            </span>
+            <span><strong>Image Quality:</strong>
+                {% if features.image_quality.is_sufficient_quality %}
+                    <span style="color: #34d399;">Sufficient (Contrast SD={{ features.image_quality.contrast_std }})</span>
+                {% else %}
+                    <span style="color: #f87171;">Insufficient / Low Contrast</span>
+                {% endif %}
+            </span>
+        </div>
+        {% if features.image_quality.quality_warnings %}
+            <div style="margin-top: 8px; padding: 8px 10px; background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.3); border-radius: 4px; font-size: 12px; color: #fca5a5;">
+                {% for w in features.image_quality.quality_warnings %}
+                    <div>⚠️ {{ w }}</div>
+                {% endfor %}
+            </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- 4 & 5. Pattern Summary Metrics & Extracted Stain Feature Table -->
+<div class="card" style="margin-bottom: 18px;">
+    <div class="card-header">
+        <h2 class="card-title" style="font-size: 16px;">
+            <span>📊</span> 4 &amp; 5. Extracted Morphological &amp; Spatial Feature Summary
+        </h2>
+        <div style="display: flex; gap: 8px; align-items: center;">
+            <span class="badge" style="background: rgba(56,189,248,0.15); color: #38bdf8;">[Automatically Measured]</span>
+            <span class="badge" style="background: var(--bg-surface); color: var(--text-secondary);">
+                Unit Mode: {{ features.measurement_unit }}
+            </span>
+        </div>
+    </div>
+
+    <!-- Pattern-Wide Aggregate Cards -->
+    <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); margin-bottom: 16px;">
+        <div class="stat-card">
+            <div class="stat-content">
+                <div class="stat-label">Accepted Stains / Total Contours</div>
+                <div class="stat-value" style="font-size: 20px;">
+                    {{ features.accepted_stain_count }} <span style="font-size: 13px; color: var(--text-muted);">/ {{ features.total_raw_contours_detected }}</span>
+                </div>
+                <div class="stat-meta">Flagged/Excluded: {{ features.rejected_or_uncertain_count }}</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-content">
+                <div class="stat-label">Spatial Distribution</div>
+                <div style="font-size: 14px; font-weight: 700; color: var(--text-primary); margin-top: 4px;">
+                    {{ features.pattern_summary.spatial_distribution_type }}
+                </div>
+                <div class="stat-meta">
+                    Linearity R²: {{ '%.4f'|format(features.pattern_summary.centroid_linearity_r2) if features.pattern_summary.centroid_linearity_r2 is not none else 'N/A (<3 stains)' }}
+                </div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-content">
+                <div class="stat-label">Mean Circularity (4&pi;A/P²)</div>
+                <div class="stat-value" style="font-size: 20px;">
+                    {{ '%.4f'|format(features.pattern_summary.mean_circularity) if features.pattern_summary.mean_circularity is not none else 'N/A' }}
+                </div>
+                <div class="stat-meta">SD: {{ '%.4f'|format(features.pattern_summary.std_circularity) if features.pattern_summary.std_circularity is not none else 'N/A' }}</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-content">
+                <div class="stat-label">Mean Aspect Ratio (L/W)</div>
+                <div class="stat-value" style="font-size: 20px;">
+                    {{ '%.4f'|format(features.pattern_summary.mean_aspect_ratio) if features.pattern_summary.mean_aspect_ratio is not none else 'N/A' }}
+                </div>
+                <div class="stat-meta">Mean Eccentricity: {{ '%.4f'|format(features.pattern_summary.mean_eccentricity) if features.pattern_summary.mean_eccentricity is not none else 'N/A' }}</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-content">
+                <div class="stat-label">Mean Solidity (A/A_hull)</div>
+                <div class="stat-value" style="font-size: 20px;">
+                    {{ '%.4f'|format(features.pattern_summary.mean_solidity) if features.pattern_summary.mean_solidity is not none else 'N/A' }}
+                </div>
+                <div class="stat-meta">Area CV: {{ '%.3f'|format(features.pattern_summary.area_cv) if features.pattern_summary.area_cv is not none else 'N/A' }}</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-content">
+                <div class="stat-label">Stain Density</div>
+                <div style="font-size: 15px; font-weight: 700; color: var(--text-primary); margin-top: 4px;">
+                    {% if features.is_calibrated and features.pattern_summary.stain_density_per_cm2 is not none %}
+                        {{ '%.3f'|format(features.pattern_summary.stain_density_per_cm2) }} stains/cm²
+                    {% else %}
+                        {{ '%.2f'|format(features.pattern_summary.stain_density_per_10k_px2) }} / 10k px²
+                    {% endif %}
+                </div>
+                <div class="stat-meta">
+                    {% if features.is_calibrated %}Calibrated Metric Density{% else %}Uncalibrated Pixel Density{% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Individual Stain Feature Table -->
+    <h3 style="font-size: 13.5px; font-weight: 700; color: var(--text-primary); margin-bottom: 8px;">
+        Detected Stain Feature Table (Pixel vs. Calibrated Metric Discipline Enforced)
+    </h3>
+    {% if features.stains %}
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Stain #</th>
+                        <th>Centroid (px)</th>
+                        <th>Area (px²)</th>
+                        <th>Area (mm²)</th>
+                        <th>Minor / Major (px)</th>
+                        <th>Minor / Major (mm)</th>
+                        <th>Aspect Ratio (L/W)</th>
+                        <th>Circularity</th>
+                        <th>Solidity</th>
+                        <th>Eccentricity</th>
+                        <th>Orientation</th>
+                        <th>Shape / Caution</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for s in features.stains %}
+                        <tr>
+                            <td><span class="case-id-badge">#{{ s.stain_index }}</span></td>
+                            <td style="font-family: var(--font-mono); font-size: 12px;">({{ s.centroid_x_px }}, {{ s.centroid_y_px }})</td>
+                            <td style="font-family: var(--font-mono);">{{ '%.1f'|format(s.area_px2) }} px²</td>
+                            <td style="font-family: var(--font-mono);">
+                                {% if features.is_calibrated and s.area_mm2 is not none %}
+                                    <span style="color: #34d399;">{{ '%.3f'|format(s.area_mm2) }} mm²</span>
+                                {% else %}
+                                    <span style="color: var(--text-muted); font-size: 11px;">Uncalibrated</span>
+                                {% endif %}
+                            </td>
+                            <td style="font-family: var(--font-mono); font-size: 12px;">{{ s.minor_axis_px }} / {{ s.major_axis_px }} px</td>
+                            <td style="font-family: var(--font-mono); font-size: 12px;">
+                                {% if features.is_calibrated and s.minor_axis_mm is not none %}
+                                    <span style="color: #34d399;">{{ s.minor_axis_mm }} / {{ s.major_axis_mm }} mm</span>
+                                {% else %}
+                                    <span style="color: var(--text-muted); font-size: 11px;">Uncalibrated</span>
+                                {% endif %}
+                            </td>
+                            <td style="font-family: var(--font-mono); font-weight: 600;">{{ '%.3f'|format(s.aspect_ratio) }}</td>
+                            <td style="font-family: var(--font-mono);">{{ '%.3f'|format(s.circularity) }}</td>
+                            <td style="font-family: var(--font-mono);">{{ '%.3f'|format(s.solidity) }}</td>
+                            <td style="font-family: var(--font-mono);">{{ '%.3f'|format(s.eccentricity) }}</td>
+                            <td style="font-family: var(--font-mono);">{{ s.orientation_deg }}°</td>
+                            <td style="font-size: 11.5px;">
+                                <strong>{{ s.shape_classification }}</strong>
+                                {% if s.caution_notes %}
+                                    <div style="color: #fcd34d; font-size: 11px; margin-top: 2px;">⚠️ {{ s.caution_notes|join('; ') }}</div>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div style="padding: 14px; background: var(--bg-surface); border-radius: 4px; color: var(--text-muted); font-size: 13px;">
+            Zero contours satisfied ellipse-fitting thresholds. Inspect the Excluded / Uncertain Detections log below.
+        </div>
+    {% endif %}
+
+    <!-- Non-Silent Rejected / Uncertain Detections Log -->
+    {% if features.rejected_or_uncertain_detections %}
+        <div style="margin-top: 16px;">
+            <h4 style="font-size: 13px; font-weight: 700; color: #fcd34d; margin-bottom: 6px;">
+                ⚠️ Flagged, Overlapping, or Excluded Contours ({{ features.rejected_or_uncertain_detections|length }} — Never Silently Discarded)
+            </h4>
+            <div class="table-responsive">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Raw Contour #</th>
+                            <th>Area (px²)</th>
+                            <th>Perimeter (px)</th>
+                            <th>Status</th>
+                            <th>Explicit Diagnostic Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for r in features.rejected_or_uncertain_detections %}
+                            <tr>
+                                <td><code>Contour-{{ r.raw_contour_id }}</code></td>
+                                <td style="font-family: var(--font-mono);">{{ r.area_px2 }} px²</td>
+                                <td style="font-family: var(--font-mono);">{{ r.perimeter_px }} px</td>
+                                <td><span class="status-pill status-review">{{ r.status }}</span></td>
+                                <td style="font-size: 12px; color: var(--text-secondary);">{{ r.reason }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    {% endif %}
+</div>
+
+<!-- 6 & 7. Candidate Classification Suggestions & Supporting/Contradicting Explanations -->
+{% if suggestions %}
+<div class="card" style="margin-bottom: 18px;">
+    <div class="card-header">
+        <div>
+            <h2 class="card-title" style="font-size: 16px;">
+                <span>🧭</span> 6 &amp; 7. Candidate Pattern Suggestions &amp; Explainable Feature Comparison
+            </h2>
+            <p style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
+                Preliminary analytical output — never forces a single mechanism and requires independent examiner review.
+            </p>
+        </div>
+        <span class="badge" style="background: rgba(192,132,252,0.16); color: #c084fc; border: 1px solid rgba(192,132,252,0.35);">
+            [Software Suggested — Experimental Rule-Based]
+        </span>
+    </div>
+
+    <!-- Overall Determination Banner -->
+    <div style="padding: 14px; background: rgba(192,132,252,0.08); border: 1px solid rgba(192,132,252,0.3); border-radius: var(--radius-sm); margin-bottom: 16px;">
+        <div style="font-size: 11.5px; text-transform: uppercase; font-weight: 700; color: #c084fc;">
+            Preliminary Software Determination:
+        </div>
+        <div style="font-size: 16px; font-weight: 700; color: var(--text-primary); margin: 4px 0;">
+            {{ suggestions.overall_determination }}
+        </div>
+        <div style="font-size: 13px; color: var(--text-secondary);">
+            {{ suggestions.determination_summary }}
+        </div>
+    </div>
+
+    {% if suggestions.global_missing_information %}
+        <div style="padding: 12px 14px; background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.3); border-radius: var(--radius-sm); margin-bottom: 16px;">
+            <div style="font-size: 12px; font-weight: 700; color: #fcd34d; margin-bottom: 4px;">
+                🔍 Missing Information / Required Contextual Verification:
+            </div>
+            <ul style="margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--text-secondary);">
+                {% for m_info in suggestions.global_missing_information %}
+                    <li>{{ m_info }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+    {% endif %}
+
+    {% if suggestions.candidate_suggestions %}
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px;">
+            {% for cand in suggestions.candidate_suggestions %}
+                <div style="padding: 14px; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 6px;">
+                        <div>
+                            <span style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 700;">
+                                Group {{ cand.group_code }} — {{ cand.group_name }}
+                            </span>
+                            <h3 style="font-size: 15px; font-weight: 700; color: var(--text-primary); margin-top: 2px;">
+                                {{ cand.category_name }}
+                            </h3>
+                        </div>
+                        <span class="badge" style="background: rgba(192,132,252,0.15); color: #c084fc; font-size: 10.5px;">
+                            [Software Suggested]
+                        </span>
+                    </div>
+
+                    <div style="font-size: 11.5px; font-weight: 600; color: #38bdf8; margin-bottom: 8px;">
+                        Evidence Indicator: {{ cand.evidence_indicator }}
+                    </div>
+
+                    <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 10px;">
+                        {{ cand.description }}
+                    </p>
+
+                    <div style="margin-bottom: 8px;">
+                        <div style="font-size: 11.5px; font-weight: 700; color: #34d399; margin-bottom: 3px;">
+                            ✓ Supporting Characteristics:
+                        </div>
+                        <ul style="margin: 0; padding-left: 16px; font-size: 12px; color: var(--text-secondary);">
+                            {% for sf in cand.supporting_features %}
+                                <li>{{ sf }}</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+
+                    {% if cand.contradicting_features %}
+                        <div style="margin-bottom: 8px;">
+                            <div style="font-size: 11.5px; font-weight: 700; color: #f87171; margin-bottom: 3px;">
+                                ✗ Contradicting / Ambiguous Characteristics:
+                            </div>
+                            <ul style="margin: 0; padding-left: 16px; font-size: 12px; color: var(--text-secondary);">
+                                {% for cf in cand.contradicting_features %}
+                                    <li>{{ cf }}</li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                    {% endif %}
+
+                    <div style="padding: 8px; background: var(--bg-main); border-radius: 4px; font-size: 11.5px; color: var(--text-muted); border: 1px solid var(--border-subtle);">
+                        <strong>Scientific Limitation:</strong> {{ cand.distinguishing_limitations }}
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <div style="padding: 14px; background: var(--bg-surface); border-radius: 4px; color: var(--text-muted); font-size: 13px;">
+            No specific candidate pattern categories could be suggested from the current image features.
+        </div>
+    {% endif %}
+</div>
+{% endif %}
+
+<!-- 8, 9 & 10. Examiner Observation System & Final Examiner Interpretation Form -->
+<div class="card">
+    <div class="card-header">
+        <div>
+            <h2 class="card-title" style="font-size: 16px;">
+                <span>📝</span> 8, 9 &amp; 10. Structured Examiner Observations &amp; Final Interpretation Sign-Off
+            </h2>
+            <p style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
+                Record physical substrate traits, scene observations, and your independent forensic conclusion separately from software suggestions.
+            </p>
+        </div>
+        {% if active_analysis %}
+            <span class="status-pill {% if active_analysis.review_status == 'Examiner Approved' %}status-completed{% elif 'Rejected' in active_analysis.review_status %}status-danger{% else %}status-review{% endif %}">
+                ● {{ active_analysis.review_status }}
+            </span>
+        {% endif %}
+    </div>
+
+    {% set form_target = url_for('pattern_analysis_review_route', case_id=case.case_id, analysis_id=active_analysis.analysis_id) if active_analysis else url_for('pattern_analysis_run_route', case_id=case.case_id) %}
+    <form method="POST" action="{{ form_target }}">
+        {% if not active_analysis and active_image %}
+            <input type="hidden" name="image_id" value="{{ active_image.image_id }}">
+        {% endif %}
+
+        <div class="form-grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-bottom: 16px;">
+            <div class="form-group">
+                <label for="suspected_category">
+                    Suspected Pattern Category <span class="badge" style="font-size: 10px; background: rgba(245,158,11,0.15); color: #fcd34d;">[Examiner Observed]</span>
+                </label>
+                {% set cur_susp = observations.suspected_category.value if observations and observations.suspected_category else 'Unspecified' %}
+                <select name="suspected_category" id="suspected_category" class="form-control">
+                    <option value="Unspecified" {% if cur_susp == 'Unspecified' %}selected{% endif %}>-- Unspecified / Open Examination --</option>
+                    {% for cat_key, cat_info in taxonomy.items() %}
+                        <option value="{{ cat_key }}" {% if cur_susp == cat_key %}selected{% endif %}>
+                            Group {{ cat_info.group_code }}: {{ cat_info.category_name }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="observed_morphology">
+                    Observed Morphology <span class="badge" style="font-size: 10px; background: rgba(245,158,11,0.15); color: #fcd34d;">[Examiner Observed]</span>
+                </label>
+                <input type="text" name="observed_morphology" id="observed_morphology" class="form-control"
+                       value="{{ observations.observed_morphology.value if observations and observations.observed_morphology and observations.observed_morphology.value != 'Not Recorded' else '' }}"
+                       placeholder="e.g. Radiating elliptical drops, linear trail, feathered smear">
+            </div>
+
+            <div class="form-group">
+                <label for="surface_material">
+                    Receiving Surface Material <span class="badge" style="font-size: 10px; background: rgba(148,163,184,0.15); color: #cbd5e1;">[Examiner Supplied]</span>
+                </label>
+                <input type="text" name="surface_material" id="surface_material" class="form-control"
+                       value="{{ observations.surface_material.value if observations and observations.surface_material and observations.surface_material.value != 'Not Recorded' else '' }}"
+                       placeholder="e.g. Smooth painted drywall, glazed tile, cotton fabric">
+            </div>
+
+            <div class="form-group">
+                <label for="surface_orientation">
+                    Surface Orientation <span class="badge" style="font-size: 10px; background: rgba(148,163,184,0.15); color: #cbd5e1;">[Examiner Supplied]</span>
+                </label>
+                {% set cur_orient = observations.surface_orientation.value if observations and observations.surface_orientation else 'Not Recorded' %}
+                <select name="surface_orientation" id="surface_orientation" class="form-control">
+                    <option value="Not Recorded" {% if cur_orient == 'Not Recorded' %}selected{% endif %}>Not Recorded</option>
+                    <option value="Horizontal Floor" {% if cur_orient == 'Horizontal Floor' %}selected{% endif %}>Horizontal Floor</option>
+                    <option value="Vertical Wall" {% if cur_orient == 'Vertical Wall' %}selected{% endif %}>Vertical Wall</option>
+                    <option value="Inclined Surface" {% if cur_orient == 'Inclined Surface' %}selected{% endif %}>Inclined Surface</option>
+                    <option value="Inverted Ceiling" {% if cur_orient == 'Inverted Ceiling' %}selected{% endif %}>Inverted Ceiling</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="surface_texture">
+                    Surface Texture &amp; Porosity <span class="badge" style="font-size: 10px; background: rgba(245,158,11,0.15); color: #fcd34d;">[Examiner Observed]</span>
+                </label>
+                <input type="text" name="surface_texture" id="surface_texture" class="form-control"
+                       value="{{ observations.surface_texture.value if observations and observations.surface_texture and observations.surface_texture.value != 'Not Recorded' else '' }}"
+                       placeholder="e.g. Smooth non-porous, rough textured concrete, absorbent weave">
+            </div>
+
+            <div class="form-group">
+                <label for="visible_distortion">
+                    Visible Distortion / Spines <span class="badge" style="font-size: 10px; background: rgba(245,158,11,0.15); color: #fcd34d;">[Examiner Observed]</span>
+                </label>
+                <input type="text" name="visible_distortion" id="visible_distortion" class="form-control"
+                       value="{{ observations.visible_distortion.value if observations and observations.visible_distortion and observations.visible_distortion.value != 'None Observed' else '' }}"
+                       placeholder="e.g. Scalloped rims, downward flow, clotting">
+            </div>
+
+            <div class="form-group">
+                <label for="overlapping_stains">
+                    Overlapping Stains Observed <span class="badge" style="font-size: 10px; background: rgba(245,158,11,0.15); color: #fcd34d;">[Examiner Observed]</span>
+                </label>
+                <input type="text" name="overlapping_stains" id="overlapping_stains" class="form-control"
+                       value="{{ observations.overlapping_stains.value if observations and observations.overlapping_stains and observations.overlapping_stains.value != 'Not Recorded' else '' }}"
+                       placeholder="e.g. No overlap, coalesced parent/satellite drops">
+            </div>
+
+            <div class="form-group">
+                <label for="air_bubbles_or_vacuoles">
+                    Air Bubbles / Mucus Vacuoles <span class="badge" style="font-size: 10px; background: rgba(245,158,11,0.15); color: #fcd34d;">[Examiner Observed]</span>
+                </label>
+                <input type="text" name="air_bubbles_or_vacuoles" id="air_bubbles_or_vacuoles" class="form-control"
+                       value="{{ observations.air_bubbles_or_vacuoles.value if observations and observations.air_bubbles_or_vacuoles and observations.air_bubbles_or_vacuoles.value != 'Not Observed' else '' }}"
+                       placeholder="e.g. Not Observed, Bubble rings present in 3 stains">
+            </div>
+
+            <div class="form-group">
+                <label for="feathered_or_skeletonized_margins">
+                    Feathered / Skeletonized Margins <span class="badge" style="font-size: 10px; background: rgba(245,158,11,0.15); color: #fcd34d;">[Examiner Observed]</span>
+                </label>
+                <input type="text" name="feathered_or_skeletonized_margins" id="feathered_or_skeletonized_margins" class="form-control"
+                       value="{{ observations.feathered_or_skeletonized_margins.value if observations and observations.feathered_or_skeletonized_margins and observations.feathered_or_skeletonized_margins.value != 'Not Observed' else '' }}"
+                       placeholder="e.g. Feathered right edge, skeletonized outer rim">
+            </div>
+
+            <div class="form-group">
+                <label for="void_shadow_observed">
+                    Void / Shadow Boundary <span class="badge" style="font-size: 10px; background: rgba(245,158,11,0.15); color: #fcd34d;">[Examiner Observed]</span>
+                </label>
+                <input type="text" name="void_shadow_observed" id="void_shadow_observed" class="form-control"
+                       value="{{ observations.void_shadow_observed.value if observations and observations.void_shadow_observed and observations.void_shadow_observed.value != 'Not Observed' else '' }}"
+                       placeholder="e.g. Not Observed, Unstained void boundary along west edge">
+            </div>
+
+            <div class="form-group">
+                <label for="environmental_observations">
+                    Environmental / Surface Conditions <span class="badge" style="font-size: 10px; background: rgba(245,158,11,0.15); color: #fcd34d;">[Examiner Observed]</span>
+                </label>
+                <input type="text" name="environmental_observations" id="environmental_observations" class="form-control"
+                       value="{{ observations.environmental_observations.value if observations and observations.environmental_observations and observations.environmental_observations.value != 'None Recorded' else '' }}"
+                       placeholder="e.g. High humidity, diluted halo, insect artifacts">
+            </div>
+
+            <div class="form-group">
+                <label for="examination_notes">
+                    General Examination Notes <span class="badge" style="font-size: 10px; background: rgba(245,158,11,0.15); color: #fcd34d;">[Examiner Observed]</span>
+                </label>
+                <input type="text" name="examination_notes" id="examination_notes" class="form-control"
+                       value="{{ observations.examination_notes.value if observations and observations.examination_notes else '' }}"
+                       placeholder="Scene context, lighting, scale verification notes">
+            </div>
+        </div>
+
+        <!-- Examiner Independent Conclusion & Decision on Software Suggestions -->
+        <div style="padding: 16px; background: rgba(16,185,129,0.06); border: 1px solid rgba(16,185,129,0.28); border-radius: var(--radius-sm); margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+                <h3 style="font-size: 14.5px; font-weight: 700; color: #34d399;">
+                    ⚖️ 9. Examiner's Independent Pattern Interpretation &amp; Suggestion Review
+                </h3>
+                <span class="badge" style="background: rgba(16,185,129,0.18); color: #34d399; border: 1px solid rgba(16,185,129,0.35);">
+                    [Examiner Approved / Recorded Separately from Software Suggestions]
+                </span>
+            </div>
+
+            <div class="form-grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px;">
+                <div class="form-group">
+                    <label for="suggestion_decision">Decision on Software Suggestions:</label>
+                    {% set cur_dec = active_analysis.suggestion_decision if active_analysis else 'Pending Examiner Review' %}
+                    <select name="suggestion_decision" id="suggestion_decision" class="form-control">
+                        <option value="Pending Examiner Review" {% if cur_dec == 'Pending Examiner Review' %}selected{% endif %}>Pending Examiner Review</option>
+                        <option value="Accepted Suggestion as Working Hypothesis" {% if cur_dec == 'Accepted Suggestion as Working Hypothesis' %}selected{% endif %}>Accept Candidate Suggestion as Working Hypothesis</option>
+                        <option value="Modified / Narrowed Interpretation" {% if cur_dec == 'Modified / Narrowed Interpretation' %}selected{% endif %}>Modify / Narrow Software Suggestions</option>
+                        <option value="Rejected Software Suggestions" {% if cur_dec == 'Rejected Software Suggestions' %}selected{% endif %}>Reject Software Suggestions</option>
+                        <option value="Indeterminate / Insufficient Evidence" {% if cur_dec == 'Indeterminate / Insufficient Evidence' %}selected{% endif %}>Mark Indeterminate / Insufficient Evidence</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="review_status">Formal Examination Review Status:</label>
+                    {% set cur_stat = active_analysis.review_status if active_analysis else 'Preliminary — Examiner Review Required' %}
+                    <select name="review_status" id="review_status" class="form-control">
+                        <option value="Preliminary — Examiner Review Required" {% if cur_stat == 'Preliminary — Examiner Review Required' %}selected{% endif %}>Preliminary — Examiner Review Required</option>
+                        <option value="Examiner Reviewed" {% if cur_stat == 'Examiner Reviewed' %}selected{% endif %}>Examiner Reviewed</option>
+                        <option value="Examiner Approved" {% if cur_stat == 'Examiner Approved' %}selected{% endif %}>Examiner Approved</option>
+                        <option value="Examiner Rejected" {% if cur_stat == 'Examiner Rejected' %}selected{% endif %}>Examiner Rejected</option>
+                        <option value="Reviewed — Indeterminate" {% if cur_stat == 'Reviewed — Indeterminate' %}selected{% endif %}>Reviewed — Indeterminate</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="examiner_name">Reviewing Examiner Name:</label>
+                    <input type="text" name="examiner_name" id="examiner_name" class="form-control"
+                           value="{{ active_analysis.examiner_name if active_analysis and active_analysis.examiner_name else case.examiner }}">
+                </div>
+            </div>
+
+            <div class="form-grid" style="grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 10px;">
+                <div class="form-group">
+                    <label for="examiner_interpretation">Examiner's Final Pattern Interpretation:</label>
+                    <input type="text" name="examiner_interpretation" id="examiner_interpretation" class="form-control"
+                           value="{{ active_analysis.examiner_interpretation if active_analysis and active_analysis.examiner_interpretation else '' }}"
+                           placeholder="e.g. Consistent with Impact Spatter; Expirated Blood excluded due to absence of vacuoles/amylase">
+                </div>
+
+                <div class="form-group">
+                    <label for="examiner_rationale">Reasons for Accepting, Modifying, or Rejecting Software Suggestions:</label>
+                    <input type="text" name="examiner_rationale" id="examiner_rationale" class="form-control"
+                           value="{{ active_analysis.examiner_rationale if active_analysis and active_analysis.examiner_rationale else '' }}"
+                           placeholder="Document physical substrate, morphological, and contextual basis for your decision">
+                </div>
+            </div>
+        </div>
+
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            <button type="submit" name="save_as_new_revision" value="false" class="btn btn-primary">
+                💾 Save Examiner Observations &amp; Review Decision
+            </button>
+            {% if active_analysis %}
+                <button type="submit" name="save_as_new_revision" value="true" class="btn btn-secondary">
+                    ➕ Save as New Examination Revision (R{{ active_analysis.revision_number + 1 }})
+                </button>
+            {% endif %}
+        </div>
+    </form>
+</div>
+{% else %}
+<div class="card" style="text-align: center; padding: 36px;">
+    <h3 style="font-size: 16px; color: var(--text-primary); margin-bottom: 8px;">No Evidence Photograph Selected for Pattern Analysis</h3>
+    <p style="font-size: 13px; color: var(--text-muted); max-width: 560px; margin: 0 auto 16px;">
+        Select an existing evidence photograph for <strong>{{ case.case_id }}</strong> above, or click one of the Controlled Reference Samples (30° Oblique, 45° Calibrated, or 90° Circular) to extract morphological features and launch the decision-support workspace.
+    </p>
+</div>
+{% endif %}
+{% endblock %}

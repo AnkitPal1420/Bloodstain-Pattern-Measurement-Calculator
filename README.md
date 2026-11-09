@@ -6,7 +6,7 @@ A scientific forensic analysis platform for **Bloodstain Pattern Analysis (BPA)*
 
 ## System Architecture
 
-The application enforces strict separation of concerns across 8 specialized Python modules:
+The application enforces strict separation of concerns across 9 specialized Python modules:
 
 - **[`calculator.py`](calculator.py) (Phase 1 — Core Trigonometry & Validation):**
   Pure analytical implementation of the bloodstain impact angle equation $\alpha = \arcsin(W / L)$, returning radians, degrees, $W/L$ ratio, perpendicular-drop classification, and forensic morphological interpretation.
@@ -23,10 +23,12 @@ The application enforces strict separation of concerns across 8 specialized Pyth
   Converts calibrated SQLite optical measurements and examiner-supplied directionality/surface coordinates into validated `StainTrajectoryInput` records, executes full 2D/3D reconstruction, and persists results.
 - **[`report_generator.py`](report_generator.py) (Phase 4.4 — Forensic PDF Reporting Engine):**
   Flask-independent ReportLab A4 PDF compiler supporting three report types (**Individual Bloodstain Examination**, **Trajectory Reconstruction**, and **Complete Forensic Case Report**) with proportional image embedding, atomic file writing, revision control (`R1, R2, ...`), and SHA-256 integrity hashing.
-- **[`database.py`](database.py) (Phase 2–4.5 — SQLite Persistence & Operational Audit Trail):**
-  Parameterized SQLite data layer managing 9 relational tables (`cases`, `evidence`, `measurements`, `evidence_images`, `reconstructions`, `reconstruction_stains`, `reconstruction_results`, `reports`, and `audit_logs`) with `PRAGMA foreign_keys = ON` and automatic rollback safety.
+- **[`pattern_analysis.py`](pattern_analysis.py) (Phase 5.1 — Bloodstain Pattern Classification & Decision Support):**
+  Examiner-assisted morphological feature extraction (Circularity $4\pi A/P^2$, Aspect Ratio $L/W$, Solidity $A/A_{\text{hull}}$, Eccentricity $\sqrt{1-(W/L)^2}$, spatial linearity $R^2$, nearest-neighbor distances, and non-silent contour rejection logs) and an explainable rule-based decision-support engine across 15 BPA pattern categories in 4 groups.
+- **[`database.py`](database.py) (Phase 2–5.1 — SQLite Persistence & Operational Audit Trail):**
+  Parameterized SQLite data layer managing 10 relational tables (`cases`, `evidence`, `measurements`, `evidence_images`, `reconstructions`, `reconstruction_stains`, `reconstruction_results`, `reports`, `audit_logs`, and `pattern_analyses`) with `PRAGMA foreign_keys = ON` and automatic rollback safety.
 - **[`app.py`](app.py) (Flask Web Laboratory Controller):**
-  Routes and REST endpoints serving the Forensic Dashboard, Case & Evidence Registry, Optical Measurement Lab, Multi-Stain Reconstruction Workspace, Interactive 3D Trajectory Lab, and Forensic PDF Report Registry.
+  Routes and REST endpoints serving the Forensic Dashboard, Case & Evidence Registry, Optical Measurement Lab, Multi-Stain Reconstruction Workspace, Interactive 3D Trajectory Lab, Pattern Classification & Decision Support Lab (`/pattern-analysis/<case_id>`), and Forensic PDF Report Registry.
 
 ---
 
@@ -76,3 +78,4 @@ Then open **`http://127.0.0.1:5000`** in your web browser.
 - [x] **Milestone 4.3:** Measurement-to-Trajectory Integration & Multi-Stain Workspace (`trajectory_integration.py`)
 - [x] **Milestone 4.4:** Professional Forensic PDF Report Generation (`report_generator.py`)
 - [x] **Milestone 4.5:** Complete System Integration, Scientific Validation, Security Audit & Final Release (`tests/test_phase4_final_validation.py`)
+- [x] **Milestone 5.1:** Advanced Bloodstain Pattern Classification & Analytical Decision Support (`pattern_analysis.py`, `templates/pattern_analysis.html`, `tests/test_phase5_1_pattern_analysis.py`)

@@ -27,12 +27,14 @@ from werkzeug.utils import secure_filename
 
 import database
 import image_processing
+import pattern_analysis
 import report_generator
 import trajectory
 import trajectory_integration
 import trajectory_visualization
 from calculator import InvalidMeasurementError, calculate_impact_angle
 from image_processing import ImageProcessingError
+from pattern_analysis import PatternAnalysisError
 from report_generator import ReportGenerationError
 from trajectory import StainTrajectoryInput, TrajectoryError
 from trajectory_integration import ReconstructionValidationError
@@ -1380,6 +1382,383 @@ def report_detail_view(report_id: str):
         return jsonify({"status": "ok", "report": record}), 200
 
     return _render_reports_page(selected_report=record)
+
+
+# ===========================================================================
+# Phase 5.1: Advanced Bloodstain Pattern Classification & Decision Support
+# ===========================================================================
+
+
+@app.route("/pattern-analysis", methods=["GET"])
+def pattern_analysis_index():
+    """Redirect to the Pattern Analysis workspace for the requested or primary forensic case."""
+    req_case = request.args.get("case_id", "").strip()
+    if req_case:
+        case = database.get_case_by_id(req_case)
+        if case:
+            return redirect(url_for("pattern_analysis_workspace", case_id=case["case_id"]))
+    all_cases = database.get_all_cases()
+    target_cid = all_cases[0]["case_id"] if all_cases else "BPA-2026-0101"
+    return redirect(url_for("pattern_analysis_workspace", case_id=target_cid))
+
+
+@app.route("/pattern-analysis/<case_id>", methods=["GET"])
+def pattern_analysis_workspace(case_id: str):
+    """
+    Render the Phase 5.1 Bloodstain Pattern Classification & Analytical Decision Support Workspace.
+    Enforces strict case validation and prevents cross-case data leakage.
+    """
+    case = database.get_case_by_id(case_id)
+    if not case:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": f"Case '{case_id}' not found."}), 404
+        abort(404)
+
+    all_cases = database.get_all_cases()
+    evidence_items = database.get_evidence_for_case(case_id)
+    case_images = database.get_images_for_case(case_id)
+    analyses = database.get_pattern_analyses_for_case(case_id)
+
+    selected_analysis_id = request.args.get("analysis_id", "").strip()
+    selected_image_id = request.args.get("image_id", "").strip()
+
+    active_analysis = None
+    if selected_analysis_id:
+        cand = database.get_pattern_analysis_by_id(selected_analysis_id)
+        if cand and cand["case_id"] == case_id:
+            active_analysis = cand
+        elif cand and cand["case_id"] != case_id:
+            # Block cross-case access
+            abort(403)
+    elif analyses and not selected_image_id:
+        active_analysis = analyses[0]
+
+    active_image = None
+    if active_analysis and active_analysis.get("image_id"):
+        active_image = database.get_image_by_id(active_analysis["image_id"])
+    elif selected_image_id:
+        cand_img = database.get_image_by_id(selected_image_id)
+        if cand_img and (not cand_img.get("case_id") or cand_img["case_id"] == case_id):
+            active_image = cand_img
+    elif case_images:
+        active_image = case_images[0]
+
+    parsed_features = None
+    parsed_suggestions = None
+    parsed_observations = pattern_analysis.normalize_examiner_observations({})
+
+    if active_analysis:
+        try:
+            parsed_features = json.loads(active_analysis["features_json"])
+            parsed_suggestions = json.loads(active_analysis["suggestions_json"])
+            parsed_observations = json.loads(active_analysis["observations_json"])
+        except Exception:
+            pass
+    elif active_image and active_image.get("filepath") and os.path.isfile(active_image["filepath"]):
+        # Live preview extraction before saving
+        try:
+            is_cal = bool(active_image.get("is_calibrated") == 1 and active_image.get("scale_factor"))
+            mm_px = float(active_image["scale_factor"]) if is_cal else None
+            parsed_features = pattern_analysis.extract_pattern_features(
+                image_source=active_image["filepath"],
+                is_calibrated=is_cal,
+                mm_per_pixel=mm_px,
+            )
+            parsed_suggestions = pattern_analysis.generate_classification_suggestions(
+                feature_result=parsed_features,
+                examiner_observations={},
+            )
+        except Exception as exc:
+            flash(f"Feature extraction preview notice: {exc}", "warning")
+
+    if request.headers.get("Accept") == "application/json":
+        return jsonify(
+            {
+                "status": "ok",
+                "case": case,
+                "active_analysis": active_analysis,
+                "features": parsed_features,
+                "suggestions": parsed_suggestions,
+                "observations": parsed_observations,
+                "analyses_count": len(analyses),
+            }
+        ), 200
+
+    return render_template(
+        "pattern_analysis.html",
+        active_page="pattern_analysis",
+        case=case,
+        all_cases=all_cases,
+        evidence_items=evidence_items,
+        case_images=case_images,
+        analyses=analyses,
+        active_analysis=active_analysis,
+        active_image=active_image,
+        features=parsed_features,
+        suggestions=parsed_suggestions,
+        observations=parsed_observations,
+        taxonomy=pattern_analysis.PATTERN_TAXONOMY,
+    )
+
+
+@app.route("/pattern-analysis/<case_id>/analyze", methods=["POST"])
+def pattern_analysis_run_route(case_id: str):
+    """
+    Execute morphological feature extraction and rule-based classification support
+    for a selected case image (or uploaded/sample image) and persist a new non-overwriting
+    revision in `pattern_analyses`.
+    """
+    case = database.get_case_by_id(case_id)
+    if not case:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": f"Case '{case_id}' not found."}), 404
+        abort(404)
+
+    image_id = request.form.get("image_id", "").strip()
+    evidence_id = request.form.get("evidence_id", "").strip() or None
+    sample_name = request.form.get("sample_name", "").strip()
+    threshold_method = request.form.get("threshold_method", "otsu").strip().lower()
+    min_area_raw = request.form.get("min_area_px", "20.0").strip()
+
+    try:
+        min_area_px = max(float(min_area_raw), 5.0)
+    except ValueError:
+        min_area_px = 20.0
+
+    # Allow loading a controlled laboratory reference sample into the case if requested
+    safe_sample = secure_filename(sample_name) if sample_name else ""
+    if safe_sample and not image_id:
+        sample_src = os.path.join(SAMPLE_IMAGES_DIR, safe_sample)
+        if os.path.isfile(sample_src) and image_processing.is_allowed_file(safe_sample):
+            new_img_id = database.generate_image_id()
+            ext = safe_sample.rsplit(".", 1)[1].lower()
+            stored_filename = f"{new_img_id}.{ext}"
+            stored_path = os.path.join(UPLOAD_ORIGINAL_DIR, stored_filename)
+            shutil.copyfile(sample_src, stored_path)
+            bgr = image_processing.load_and_validate_image(stored_path)
+            h_px, w_px = bgr.shape[:2]
+            is_cal_sample = 1 if "calibrated" in safe_sample else 0
+            scale_sample = 0.25 if is_cal_sample else 1.0
+            database.create_evidence_image(
+                image_id=new_img_id,
+                case_id=case_id,
+                evidence_id=evidence_id,
+                filename=stored_filename,
+                filepath=stored_path,
+                original_filename=safe_sample,
+                file_size=os.path.getsize(stored_path),
+                mime_type="image/png",
+                width_px=w_px,
+                height_px=h_px,
+                scale_factor=scale_sample,
+                is_calibrated=is_cal_sample,
+            )
+            image_id = new_img_id
+
+    if not image_id:
+        msg = "Please select an evidence photograph or load a controlled reference sample to analyze."
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": msg}), 400
+        flash(msg, "danger")
+        return redirect(url_for("pattern_analysis_workspace", case_id=case_id))
+
+    img_rec = database.get_image_by_id(image_id)
+    if not img_rec:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": f"Image '{image_id}' not found."}), 404
+        flash(f"Evidence image '{image_id}' not found.", "danger")
+        return redirect(url_for("pattern_analysis_workspace", case_id=case_id))
+
+    # Prevent cross-case image access
+    if img_rec.get("case_id") and img_rec["case_id"] != case_id:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": "Image belongs to a different forensic case."}), 403
+        abort(403)
+
+    raw_obs = {
+        "suspected_category": request.form.get("suspected_category", ""),
+        "observed_morphology": request.form.get("observed_morphology", ""),
+        "surface_material": request.form.get("surface_material", ""),
+        "surface_orientation": request.form.get("surface_orientation", ""),
+        "surface_texture": request.form.get("surface_texture", ""),
+        "visible_distortion": request.form.get("visible_distortion", ""),
+        "overlapping_stains": request.form.get("overlapping_stains", ""),
+        "air_bubbles_or_vacuoles": request.form.get("air_bubbles_or_vacuoles", ""),
+        "feathered_or_skeletonized_margins": request.form.get("feathered_or_skeletonized_margins", ""),
+        "void_shadow_observed": request.form.get("void_shadow_observed", ""),
+        "environmental_observations": request.form.get("environmental_observations", ""),
+        "examination_notes": request.form.get("examination_notes", ""),
+    }
+
+    try:
+        is_cal = bool(img_rec.get("is_calibrated") == 1 and img_rec.get("scale_factor"))
+        mm_px = float(img_rec["scale_factor"]) if is_cal else None
+
+        feat_res = pattern_analysis.extract_pattern_features(
+            image_source=img_rec["filepath"],
+            is_calibrated=is_cal,
+            mm_per_pixel=mm_px,
+            threshold_method=threshold_method,
+            min_area_px=min_area_px,
+        )
+        norm_obs = pattern_analysis.normalize_examiner_observations(raw_obs)
+        sugg_res = pattern_analysis.generate_classification_suggestions(
+            feature_result=feat_res,
+            examiner_observations=raw_obs,
+        )
+
+        # Save without overlay_b64 bloat in SQLite JSON if huge, or keep for reproducibility
+        saved_pa = database.create_pattern_analysis_record(
+            case_id=case_id,
+            evidence_id=evidence_id or img_rec.get("evidence_id"),
+            image_id=image_id,
+            is_calibrated=is_cal,
+            mm_per_pixel=mm_px,
+            features_json=json.dumps(feat_res),
+            suggestions_json=json.dumps(sugg_res),
+            observations_json=json.dumps(norm_obs),
+            overall_determination=sugg_res["overall_determination"],
+            software_version=pattern_analysis.PATTERN_ENGINE_VERSION,
+            review_status="Preliminary — Examiner Review Required",
+        )
+
+        if request.headers.get("Accept") == "application/json":
+            return jsonify(
+                {
+                    "status": "ok",
+                    "analysis": saved_pa,
+                    "features": feat_res,
+                    "suggestions": sugg_res,
+                    "observations": norm_obs,
+                }
+            ), 201
+
+        flash(
+            f"Pattern Analysis {saved_pa['analysis_id']} (Revision R{saved_pa['revision_number']}) generated. "
+            f"Preliminary status: {saved_pa['overall_determination']}.",
+            "success",
+        )
+        return redirect(
+            url_for(
+                "pattern_analysis_workspace",
+                case_id=case_id,
+                analysis_id=saved_pa["analysis_id"],
+            )
+        )
+    except (PatternAnalysisError, ImageProcessingError) as err:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": str(err)}), 400
+        flash(f"Pattern Analysis Error: {err}", "danger")
+        return redirect(url_for("pattern_analysis_workspace", case_id=case_id))
+
+
+@app.route("/pattern-analysis/<case_id>/review/<analysis_id>", methods=["POST"])
+def pattern_analysis_review_route(case_id: str, analysis_id: str):
+    """
+    Record examiner observations, decision on software suggestions (accept / modify / reject),
+    and final examiner interpretation for a pattern analysis record.
+    Supports either updating the current record's review state or saving a new revision.
+    """
+    case = database.get_case_by_id(case_id)
+    if not case:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": f"Case '{case_id}' not found."}), 404
+        abort(404)
+
+    existing = database.get_pattern_analysis_by_id(analysis_id)
+    if not existing:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": f"Analysis '{analysis_id}' not found."}), 404
+        abort(404)
+
+    # Enforce strict case ownership
+    if existing["case_id"] != case_id:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": "Unauthorized cross-case access."}), 403
+        abort(403)
+
+    raw_obs = {
+        "suspected_category": request.form.get("suspected_category", ""),
+        "observed_morphology": request.form.get("observed_morphology", ""),
+        "surface_material": request.form.get("surface_material", ""),
+        "surface_orientation": request.form.get("surface_orientation", ""),
+        "surface_texture": request.form.get("surface_texture", ""),
+        "visible_distortion": request.form.get("visible_distortion", ""),
+        "overlapping_stains": request.form.get("overlapping_stains", ""),
+        "air_bubbles_or_vacuoles": request.form.get("air_bubbles_or_vacuoles", ""),
+        "feathered_or_skeletonized_margins": request.form.get("feathered_or_skeletonized_margins", ""),
+        "void_shadow_observed": request.form.get("void_shadow_observed", ""),
+        "environmental_observations": request.form.get("environmental_observations", ""),
+        "examination_notes": request.form.get("examination_notes", ""),
+    }
+
+    suggestion_decision = request.form.get("suggestion_decision", "Pending Examiner Review").strip()
+    examiner_interpretation = request.form.get("examiner_interpretation", "").strip()
+    examiner_rationale = request.form.get("examiner_rationale", "").strip()
+    examiner_name = request.form.get("examiner_name", "").strip() or case.get("examiner")
+    review_status = request.form.get("review_status", "Examiner Reviewed").strip()
+    save_as_new_revision = request.form.get("save_as_new_revision") == "true"
+
+    feat_res = json.loads(existing["features_json"])
+    norm_obs = pattern_analysis.normalize_examiner_observations(raw_obs)
+    sugg_res = pattern_analysis.generate_classification_suggestions(
+        feature_result=feat_res,
+        examiner_observations=raw_obs,
+    )
+
+    if save_as_new_revision:
+        updated = database.create_pattern_analysis_record(
+            case_id=case_id,
+            evidence_id=existing.get("evidence_id"),
+            image_id=existing.get("image_id"),
+            is_calibrated=bool(existing.get("is_calibrated")),
+            mm_per_pixel=existing.get("mm_per_pixel"),
+            features_json=existing["features_json"],
+            suggestions_json=json.dumps(sugg_res),
+            observations_json=json.dumps(norm_obs),
+            overall_determination=sugg_res["overall_determination"],
+            software_version=pattern_analysis.PATTERN_ENGINE_VERSION,
+            suggestion_decision=suggestion_decision,
+            examiner_interpretation=examiner_interpretation,
+            examiner_rationale=examiner_rationale,
+            examiner_name=examiner_name,
+            review_status=review_status,
+        )
+    else:
+        updated = database.update_pattern_analysis_examiner_review(
+            analysis_id=analysis_id,
+            suggestion_decision=suggestion_decision,
+            examiner_interpretation=examiner_interpretation,
+            examiner_rationale=examiner_rationale,
+            examiner_name=examiner_name,
+            review_status=review_status,
+            observations_json=json.dumps(norm_obs),
+            suggestions_json=json.dumps(sugg_res),
+            overall_determination=sugg_res["overall_determination"],
+        )
+
+    if request.headers.get("Accept") == "application/json":
+        return jsonify(
+            {
+                "status": "ok",
+                "analysis": updated,
+                "suggestions": sugg_res,
+                "observations": norm_obs,
+            }
+        ), 200
+
+    flash(
+        f"Examiner review saved for {updated['analysis_id']} "
+        f"(Decision: {updated['suggestion_decision']}, Status: {updated['review_status']}).",
+        "success",
+    )
+    return redirect(
+        url_for(
+            "pattern_analysis_workspace",
+            case_id=case_id,
+            analysis_id=updated["analysis_id"],
+        )
+    )
 
 
 if __name__ == "__main__":

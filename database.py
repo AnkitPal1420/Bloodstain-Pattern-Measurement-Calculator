@@ -279,6 +279,42 @@ def init_db(seed_demo: bool = False) -> None:
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_case_id ON audit_logs(case_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_action_type ON audit_logs(action_type);")
 
+    # 10. Bloodstain Pattern Classification & Decision Support table (Phase 5.1)
+    # Preserves strict separation between Automatically Measured features, Software Suggested
+    # candidate interpretations, Examiner Observed parameters, and Examiner Approved conclusions.
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pattern_analyses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            analysis_id TEXT UNIQUE NOT NULL,
+            case_id TEXT NOT NULL,
+            evidence_id TEXT,
+            image_id TEXT,
+            revision_number INTEGER NOT NULL DEFAULT 1,
+            software_version TEXT NOT NULL,
+            is_calibrated INTEGER NOT NULL DEFAULT 0,
+            mm_per_pixel REAL,
+            features_json TEXT NOT NULL,
+            suggestions_json TEXT NOT NULL,
+            observations_json TEXT NOT NULL,
+            overall_determination TEXT NOT NULL,
+            suggestion_decision TEXT NOT NULL DEFAULT 'Pending Examiner Review',
+            examiner_interpretation TEXT,
+            examiner_rationale TEXT,
+            examiner_name TEXT,
+            review_status TEXT NOT NULL DEFAULT 'Preliminary — Examiner Review Required',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (case_id) REFERENCES cases (case_id) ON DELETE CASCADE,
+            FOREIGN KEY (evidence_id) REFERENCES evidence (evidence_id) ON DELETE SET NULL,
+            FOREIGN KEY (image_id) REFERENCES evidence_images (image_id) ON DELETE SET NULL
+        );
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pat_case_id ON pattern_analyses(case_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pat_image_id ON pattern_analyses(image_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pat_analysis_id ON pattern_analyses(analysis_id);")
+
     conn.commit()
     conn.close()
 
@@ -287,9 +323,10 @@ def init_db(seed_demo: bool = False) -> None:
 
 
 def clear_all_data() -> None:
-    """Clear all records from audit_logs, reports, reconstruction tables, measurements, evidence_images, evidence, and cases."""
+    """Clear all records from pattern_analyses, audit_logs, reports, reconstruction tables, measurements, evidence_images, evidence, and cases."""
     conn = get_db_connection()
     try:
+        conn.execute("DELETE FROM pattern_analyses;")
         conn.execute("DELETE FROM audit_logs;")
         conn.execute("DELETE FROM reports;")
         conn.execute("DELETE FROM reconstruction_results;")
@@ -1692,5 +1729,300 @@ def get_all_reports(
     rows = [dict(r) for r in cursor.fetchall()]
     conn.close()
     return rows
+
+
+# ===========================================================================
+# Phase 5.1: Pattern Analysis & Decision Support Persistence & Audit Logging
+# ===========================================================================
+
+
+def get_next_pattern_analysis_revision(
+    case_id: str,
+    image_id: Optional[str] = None,
+) -> int:
+    """
+    Determine the next sequential revision number (1, 2, 3...) for a pattern analysis
+    within a case (and optional image_id). Never overwrites prior examinations.
+    """
+    conn = get_db_connection()
+    if image_id and str(image_id).strip():
+        cursor = conn.execute(
+            "SELECT MAX(revision_number) FROM pattern_analyses WHERE case_id = ? AND image_id = ?;",
+            (case_id.strip(), str(image_id).strip()),
+        )
+    else:
+        cursor = conn.execute(
+            "SELECT MAX(revision_number) FROM pattern_analyses WHERE case_id = ? AND image_id IS NULL;",
+            (case_id.strip(),),
+        )
+    row = cursor.fetchone()
+    conn.close()
+    max_rev = row[0] if row and row[0] is not None else 0
+    return int(max_rev) + 1
+
+
+def generate_pattern_analysis_id(revision_number: int = 1) -> str:
+    """Generate a unique pattern analysis ID in the format PAT-YYYY-NNNN-R<rev>."""
+    conn = get_db_connection()
+    current_year = datetime.now().year
+    while True:
+        num = random.randint(1000, 9999)
+        candidate = f"PAT-{current_year}-{num}-R{int(revision_number)}"
+        cursor = conn.execute("SELECT 1 FROM pattern_analyses WHERE analysis_id = ?;", (candidate,))
+        if not cursor.fetchone():
+            conn.close()
+            return candidate
+
+
+def create_pattern_analysis_record(
+    case_id: str,
+    features_json: str,
+    suggestions_json: str,
+    observations_json: str,
+    overall_determination: str,
+    software_version: str = "BPMS Pattern Analysis Decision-Support Engine v5.1",
+    evidence_id: Optional[str] = None,
+    image_id: Optional[str] = None,
+    is_calibrated: bool = False,
+    mm_per_pixel: Optional[float] = None,
+    suggestion_decision: str = "Pending Examiner Review",
+    examiner_interpretation: Optional[str] = None,
+    examiner_rationale: Optional[str] = None,
+    examiner_name: Optional[str] = None,
+    review_status: str = "Preliminary — Examiner Review Required",
+    analysis_id: Optional[str] = None,
+    revision_number: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Insert a new Bloodstain Pattern Analysis record into SQLite without overwriting
+    any previous examination, and record the required forensic audit trail entries:
+    - Pattern Analysis Creation (or Analysis Revision if revision_number > 1)
+    - Feature Extraction
+    - Classification Suggestion Generation
+    - Examiner Interpretation Modification / Analysis Approval (if supplied)
+    """
+    rev = (
+        int(revision_number)
+        if revision_number is not None
+        else get_next_pattern_analysis_revision(case_id=case_id, image_id=image_id)
+    )
+    aid = analysis_id.strip() if analysis_id else generate_pattern_analysis_id(revision_number=rev)
+
+    # Enforce rule: Never mark an analysis as examiner-approved automatically unless explicitly signed off
+    eff_review_status = review_status.strip() if review_status else "Preliminary — Examiner Review Required"
+
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO pattern_analyses (
+                analysis_id, case_id, evidence_id, image_id, revision_number,
+                software_version, is_calibrated, mm_per_pixel,
+                features_json, suggestions_json, observations_json,
+                overall_determination, suggestion_decision,
+                examiner_interpretation, examiner_rationale, examiner_name,
+                review_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            (
+                aid,
+                case_id.strip(),
+                evidence_id.strip() if evidence_id and str(evidence_id).strip() else None,
+                image_id.strip() if image_id and str(image_id).strip() else None,
+                rev,
+                software_version.strip(),
+                1 if is_calibrated else 0,
+                float(mm_per_pixel) if (is_calibrated and mm_per_pixel is not None) else None,
+                features_json,
+                suggestions_json,
+                observations_json,
+                overall_determination.strip(),
+                suggestion_decision.strip() if suggestion_decision else "Pending Examiner Review",
+                examiner_interpretation.strip() if examiner_interpretation else None,
+                examiner_rationale.strip() if examiner_rationale else None,
+                examiner_name.strip() if examiner_name else None,
+                eff_review_status,
+            ),
+        )
+
+        # Log creation / revision
+        create_action = "Analysis Revision" if rev > 1 else "Pattern Analysis Creation"
+        log_audit_event(
+            action_type=create_action,
+            entity_type="pattern_analysis",
+            entity_id=aid,
+            case_id=case_id,
+            details=f"Image={image_id or 'None'}, Rev=R{rev}, Calibrated={bool(is_calibrated)}",
+            conn=conn,
+        )
+        log_audit_event(
+            action_type="Feature Extraction",
+            entity_type="pattern_analysis",
+            entity_id=aid,
+            case_id=case_id,
+            details=f"Image={image_id or 'None'}, Unit={'mm' if is_calibrated else 'px'}",
+            conn=conn,
+        )
+        log_audit_event(
+            action_type="Classification Suggestion Generation",
+            entity_type="pattern_analysis",
+            entity_id=aid,
+            case_id=case_id,
+            details=f"Determination={overall_determination.strip()}",
+            conn=conn,
+        )
+        if examiner_interpretation and str(examiner_interpretation).strip():
+            log_audit_event(
+                action_type="Examiner Interpretation Modification",
+                entity_type="pattern_analysis",
+                entity_id=aid,
+                case_id=case_id,
+                details=f"Decision={suggestion_decision}, Interpretation={examiner_interpretation.strip()[:60]}",
+                conn=conn,
+            )
+        if eff_review_status in ("Examiner Approved", "Examiner Rejected"):
+            log_audit_event(
+                action_type="Analysis Approval",
+                entity_type="pattern_analysis",
+                entity_id=aid,
+                case_id=case_id,
+                details=f"Status={eff_review_status}, Decision={suggestion_decision}",
+                conn=conn,
+            )
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    return get_pattern_analysis_by_id(aid)
+
+
+def update_pattern_analysis_examiner_review(
+    analysis_id: str,
+    suggestion_decision: str,
+    examiner_interpretation: str,
+    examiner_rationale: str,
+    examiner_name: Optional[str] = None,
+    review_status: str = "Examiner Reviewed",
+    observations_json: Optional[str] = None,
+    suggestions_json: Optional[str] = None,
+    overall_determination: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Record or update the examiner's independent observations, decision on software suggestions
+    (Accepted / Modified / Rejected / Indeterminate), final interpretation, and review status.
+    Logs 'Examiner Interpretation Modification' and (when approved/rejected) 'Analysis Approval'.
+    """
+    existing = get_pattern_analysis_by_id(analysis_id)
+    if not existing:
+        return None
+
+    new_obs = observations_json if observations_json is not None else existing["observations_json"]
+    new_sugg = suggestions_json if suggestions_json is not None else existing["suggestions_json"]
+    new_det = overall_determination.strip() if overall_determination else existing["overall_determination"]
+    new_dec = suggestion_decision.strip() if suggestion_decision else existing["suggestion_decision"]
+    new_interp = examiner_interpretation.strip() if examiner_interpretation is not None else existing["examiner_interpretation"]
+    new_rat = examiner_rationale.strip() if examiner_rationale is not None else existing["examiner_rationale"]
+    new_exam = examiner_name.strip() if examiner_name is not None else existing["examiner_name"]
+    new_stat = review_status.strip() if review_status else existing["review_status"]
+
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            UPDATE pattern_analyses
+            SET observations_json = ?,
+                suggestions_json = ?,
+                overall_determination = ?,
+                suggestion_decision = ?,
+                examiner_interpretation = ?,
+                examiner_rationale = ?,
+                examiner_name = ?,
+                review_status = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE analysis_id = ?;
+            """,
+            (
+                new_obs,
+                new_sugg,
+                new_det,
+                new_dec,
+                new_interp,
+                new_rat,
+                new_exam,
+                new_stat,
+                analysis_id.strip(),
+            ),
+        )
+
+        log_audit_event(
+            action_type="Examiner Interpretation Modification",
+            entity_type="pattern_analysis",
+            entity_id=analysis_id.strip(),
+            case_id=existing["case_id"],
+            details=f"Decision={new_dec}, Interpretation={new_interp[:60] if new_interp else 'None'}",
+            conn=conn,
+        )
+        if new_stat in ("Examiner Approved", "Examiner Rejected", "Reviewed — Indeterminate"):
+            log_audit_event(
+                action_type="Analysis Approval",
+                entity_type="pattern_analysis",
+                entity_id=analysis_id.strip(),
+                case_id=existing["case_id"],
+                details=f"ReviewStatus={new_stat}, Decision={new_dec}",
+                conn=conn,
+            )
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    return get_pattern_analysis_by_id(analysis_id)
+
+
+def get_pattern_analysis_by_id(analysis_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve a single pattern analysis record by its unique analysis_id."""
+    if not analysis_id or not str(analysis_id).strip():
+        return None
+    conn = get_db_connection()
+    cursor = conn.execute(
+        """
+        SELECT pa.*, ei.original_filename AS image_filename, ei.filepath AS image_filepath
+        FROM pattern_analyses pa
+        LEFT JOIN evidence_images ei ON pa.image_id = ei.image_id
+        WHERE pa.analysis_id = ?;
+        """,
+        (str(analysis_id).strip(),),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_pattern_analyses_for_case(case_id: str) -> List[Dict[str, Any]]:
+    """Retrieve all pattern analyses for a given case_id ordered newest first."""
+    if not case_id or not str(case_id).strip():
+        return []
+    conn = get_db_connection()
+    cursor = conn.execute(
+        """
+        SELECT pa.*, ei.original_filename AS image_filename, ei.filepath AS image_filepath
+        FROM pattern_analyses pa
+        LEFT JOIN evidence_images ei ON pa.image_id = ei.image_id
+        WHERE pa.case_id = ?
+        ORDER BY pa.id DESC;
+        """,
+        (str(case_id).strip(),),
+    )
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
 
 

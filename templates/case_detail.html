@@ -35,6 +35,9 @@
             <a href="{{ url_for('reconstruction_workspace', case_id=case.case_id) }}" class="btn btn-secondary" style="border-color: rgba(56,189,248,0.4); color: #38bdf8;">
                 <span>🧭</span> Trajectory Reconstruction
             </a>
+            <a href="{{ url_for('pattern_analysis_workspace', case_id=case.case_id) }}" class="btn btn-secondary" style="border-color: rgba(192,132,252,0.4); color: #c084fc;">
+                <span>🧬</span> Pattern Classification Lab
+            </a>
             <form method="POST" action="{{ url_for('generate_case_report_route', case_id=case.case_id) }}" style="display: inline;">
                 <input type="hidden" name="report_status" value="DRAFT">
                 <button type="submit" class="btn btn-secondary" style="border-color: rgba(16,185,129,0.4); color: var(--status-active);">

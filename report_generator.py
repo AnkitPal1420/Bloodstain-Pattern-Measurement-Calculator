@@ -956,6 +956,128 @@ def _build_section_6_7_8_9_trajectory_sections(
         story.append(Paragraph(f"Visual diagram rendering note: {exc}", styles["BodyLeft"]))
 
 
+def _build_section_pattern_analysis(
+    story: List[Any],
+    styles: Dict[str, ParagraphStyle],
+    pattern_analyses: Optional[List[Dict[str, Any]]],
+) -> None:
+    """
+    Phase 5.1 — Bloodstain Pattern Classification & Analytical Decision Support Section.
+    Renders when pattern_analyses records are associated with the case or report scope.
+    Clearly distinguishes Automatically Measured features, Software Suggested candidates,
+    Examiner Observed parameters, and Examiner Approved conclusions.
+    """
+    if not pattern_analyses:
+        return
+
+    story.append(
+        Paragraph(
+            "SECTION 9B — BLOODSTAIN PATTERN CLASSIFICATION & ANALYTICAL DECISION SUPPORT",
+            styles["SectionHeading"],
+        )
+    )
+    story.append(HRFlowable(width="100%", thickness=0.6, color=colors.HexColor("#cbd5e1"), spaceAfter=6))
+
+    story.append(
+        Paragraph(
+            "<b>Pattern Analysis Methodology:</b> Quantitative contour morphology (Circularity = 4*pi*A/P^2, "
+            "Aspect Ratio = L/W, Solidity = A/A_hull, Eccentricity = sqrt(1 - (W/L)^2), spatial density, "
+            "nearest-neighbor dispersion, and centroid linearity R^2) is extracted deterministically from "
+            "segmented evidence imagery and evaluated alongside structured examiner observations. "
+            "<b>Software suggestions are preliminary analytical hypotheses only and never establish a "
+            "definitive deposition mechanism without examiner verification.</b>",
+            styles["Body"],
+        )
+    )
+
+    for pa in pattern_analyses:
+        try:
+            feats = json.loads(pa.get("features_json") or "{}")
+            suggs = json.loads(pa.get("suggestions_json") or "{}")
+            obs = json.loads(pa.get("observations_json") or "{}")
+        except Exception:
+            continue
+
+        summary = feats.get("pattern_summary", {})
+        is_cal = bool(pa.get("is_calibrated"))
+        unit_lbl = f"Calibrated Metric ({pa.get('mm_per_pixel'):.4f} mm/px)" if is_cal and pa.get("mm_per_pixel") else "Uncalibrated (Pixel Units Only)"
+
+        meta_rows = [
+            ["Pattern Analysis ID & Revision", f"{pa.get('analysis_id')}  (Revision R{pa.get('revision_number', 1)})"],
+            ["Source Evidence Image ID", f"{pa.get('image_id') or 'N/A'}  ({pa.get('image_filename') or 'No filename'})"],
+            ["Calibration & Unit Discipline", f"[Examiner Supplied] {unit_lbl}"],
+            ["Detected Contours (Accepted / Flagged)", f"[Automatically Measured] {feats.get('accepted_stain_count', 0)} accepted stains / {feats.get('rejected_or_uncertain_count', 0)} rejected or uncertain contours"],
+            ["Spatial Distribution & Linearity", f"[Automatically Measured] {summary.get('spatial_distribution_type', 'N/A')}  (Linearity R^2 = {summary.get('centroid_linearity_r2') if summary.get('centroid_linearity_r2') is not None else 'N/A'})"],
+            [
+                "Mean Morphological Ratios",
+                f"[Automatically Measured] Circularity = {summary.get('mean_circularity') or 'N/A'}, "
+                f"Aspect Ratio = {summary.get('mean_aspect_ratio') or 'N/A'}, "
+                f"Solidity = {summary.get('mean_solidity') or 'N/A'}, "
+                f"Eccentricity = {summary.get('mean_eccentricity') or 'N/A'}",
+            ],
+            ["Software Preliminary Determination", f"[Software Suggested] {pa.get('overall_determination')}"],
+            ["Examiner Suggestion Decision", f"[Examiner Observed] {pa.get('suggestion_decision') or 'Pending Examiner Review'}"],
+            ["Examiner Review Status", f"[{pa.get('review_status') or 'Preliminary — Examiner Review Required'}]"],
+            [
+                "Final Examiner Interpretation",
+                Paragraph(
+                    f"<b>[Examiner Approved / Recorded]:</b> {pa.get('examiner_interpretation') or 'Not yet recorded — Pending examiner sign-off.'}",
+                    styles["TableCell"],
+                ),
+            ],
+            [
+                "Examiner Decision Rationale & Notes",
+                Paragraph(
+                    f"<b>[Examiner Observed]:</b> {pa.get('examiner_rationale') or 'No rationale recorded.'} | "
+                    f"Substrate: {obs.get('surface_material', {}).get('value', 'N/A')} ({obs.get('surface_texture', {}).get('value', 'N/A')}) | "
+                    f"Notes: {obs.get('examination_notes', {}).get('value', 'None')}",
+                    styles["TableCell"],
+                ),
+            ],
+        ]
+        pa_tbl = Table(meta_rows, colWidths=[58 * mm, 116 * mm])
+        pa_tbl.setStyle(_kv_table_style())
+        story.append(pa_tbl)
+        story.append(Spacer(1, 3 * mm))
+
+        cand_list = suggs.get("candidate_suggestions", [])
+        if cand_list:
+            story.append(
+                Paragraph(
+                    f"<b>Candidate Pattern Interpretations for {pa.get('analysis_id')} ([Software Suggested] — Require Examiner Review):</b>",
+                    styles["SubHeading"],
+                )
+            )
+            c_rows: List[List[Any]] = [
+                ["Candidate Category", "Evidence Indicator", "Supporting Characteristics", "Contradicting / Limiting Factors"]
+            ]
+            for c in cand_list[:5]:
+                supp_txt = "; ".join(c.get("supporting_features", [])) or "None"
+                contra_txt = "; ".join(c.get("contradicting_features", []) + [c.get("distinguishing_limitations", "")])
+                c_rows.append(
+                    [
+                        Paragraph(f"<b>{c.get('category_name')}</b> ({c.get('group_name')})", styles["TableCell"]),
+                        Paragraph(str(c.get("evidence_indicator", "")), styles["TableCell"]),
+                        Paragraph(supp_txt, styles["TableCell"]),
+                        Paragraph(contra_txt, styles["TableCell"]),
+                    ]
+                )
+            c_tbl = Table(c_rows, colWidths=[36 * mm, 34 * mm, 52 * mm, 52 * mm], repeatRows=1)
+            c_tbl.setStyle(_standard_table_style())
+            story.append(c_tbl)
+            story.append(Spacer(1, 3 * mm))
+
+    story.append(
+        Paragraph(
+            "<b>Classification Limitations Notice:</b> Bloodstain morphology and spatial distribution alone "
+            "cannot establish impact velocity, applied force, specific weapon type, or exact chronological "
+            "sequence of events. Morphological overlap exists between impact spatter, expirated blood, "
+            "and satellite spatter, as well as between linear cast-off and drip trails.",
+            styles["NoticeBox"],
+        )
+    )
+
+
 def _build_section_10_11_12_closing(
     story: List[Any],
     styles: Dict[str, ParagraphStyle],
@@ -1096,6 +1218,7 @@ def _compile_pdf_document(
     reconstruction: Optional[Dict[str, Any]],
     rec_stains: List[Dict[str, Any]],
     rec_result: Optional[Dict[str, Any]],
+    pattern_analyses: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Build the 12-section PDF document into a temporary file, validate the PDF header/EOF,
@@ -1130,13 +1253,14 @@ def _compile_pdf_document(
     story: List[Any] = []
     fig_counter = [1]
 
-    # Assemble all 12 forensic sections
+    # Assemble all forensic sections
     _build_section_1_cover(story, styles, meta, case)
     _build_section_2_case_info(story, styles, case, evidence_items, images)
     _build_section_3_evidence_documentation(story, styles, evidence_items, images, image_hashes, fig_counter)
     _build_section_4_optical_methodology(story, styles, measurements, images_by_id, fig_counter)
     _build_section_5_individual_measurements_table(story, styles, measurements)
     _build_section_6_7_8_9_trajectory_sections(story, styles, reconstruction, rec_stains, rec_result, fig_counter)
+    _build_section_pattern_analysis(story, styles, pattern_analyses)
     _build_section_10_11_12_closing(story, styles, meta, measurements, reconstruction, rec_result, image_hashes)
 
     try:
@@ -1446,6 +1570,8 @@ def generate_case_report(
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
     }
 
+    pattern_analyses = database.get_pattern_analyses_for_case(case["case_id"])
+
     return _compile_pdf_document(
         output_dir=output_dir,
         meta=meta,
@@ -1456,4 +1582,5 @@ def generate_case_report(
         reconstruction=active_rec,
         rec_stains=rec_stains,
         rec_result=rec_result,
+        pattern_analyses=pattern_analyses,
     )
