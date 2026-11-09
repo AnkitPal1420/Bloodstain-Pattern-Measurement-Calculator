@@ -8,6 +8,7 @@ Uses Python's standard library sqlite3 for robust, dependency-free persistence.
 """
 
 import os
+import json
 import random
 import sqlite3
 from datetime import datetime
@@ -350,6 +351,47 @@ def init_db(seed_demo: bool = False) -> None:
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_ovr_image_id ON overlap_analyses(image_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_ovr_analysis_id ON overlap_analyses(analysis_id);")
 
+    # 12. Advanced Uncertainty & Sensitivity Analysis table (Phase 5.3)
+    # Stores analytical error propagation, Monte Carlo simulation quantiles,
+    # and sensitivity ranking metrics with non-destructive revision tracking.
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS uncertainty_analyses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            analysis_id TEXT UNIQUE NOT NULL,
+            case_id TEXT NOT NULL,
+            stain_id INTEGER,
+            stain_label TEXT,
+            revision_number INTEGER NOT NULL DEFAULT 1,
+            parent_analysis_id TEXT,
+            width REAL NOT NULL,
+            length REAL NOT NULL,
+            width_uncertainty REAL,
+            length_uncertainty REAL,
+            correlation REAL DEFAULT 0.0,
+            scale_factor REAL DEFAULT 1.0,
+            scale_uncertainty REAL DEFAULT 0.0,
+            uncertainty_source TEXT,
+            is_manual INTEGER DEFAULT 0,
+            iterations INTEGER DEFAULT 10000,
+            random_seed INTEGER DEFAULT 42,
+            distribution TEXT DEFAULT 'normal',
+            perturbation_percentage REAL DEFAULT 5.0,
+            analysis_data_json TEXT NOT NULL,
+            review_status TEXT NOT NULL DEFAULT 'Preliminary — Examiner Review Required',
+            examiner_name TEXT,
+            examiner_notes TEXT,
+            reviewed_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (case_id) REFERENCES cases (case_id) ON DELETE CASCADE,
+            FOREIGN KEY (stain_id) REFERENCES measurements (id) ON DELETE SET NULL
+        );
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_unc_case_id ON uncertainty_analyses(case_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_unc_stain_id ON uncertainty_analyses(stain_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_unc_analysis_id ON uncertainty_analyses(analysis_id);")
+
     conn.commit()
     conn.close()
 
@@ -358,9 +400,10 @@ def init_db(seed_demo: bool = False) -> None:
 
 
 def clear_all_data() -> None:
-    """Clear all records from overlap_analyses, pattern_analyses, audit_logs, reports, reconstruction tables, measurements, evidence_images, evidence, and cases."""
+    """Clear all records from uncertainty_analyses, overlap_analyses, pattern_analyses, audit_logs, reports, reconstruction tables, measurements, evidence_images, evidence, and cases."""
     conn = get_db_connection()
     try:
+        conn.execute("DELETE FROM uncertainty_analyses;")
         conn.execute("DELETE FROM overlap_analyses;")
         conn.execute("DELETE FROM pattern_analyses;")
         conn.execute("DELETE FROM audit_logs;")
@@ -2309,6 +2352,242 @@ def get_overlap_analyses_for_case(case_id: str) -> List[Dict[str, Any]]:
     rows = [dict(r) for r in cursor.fetchall()]
     conn.close()
     return rows
+
+
+# ===========================================================================
+# Phase 5.3: Advanced Uncertainty & Sensitivity Analysis Records
+# ===========================================================================
+
+
+def get_next_uncertainty_analysis_revision(case_id: str, base_id: Optional[str] = None) -> int:
+    """Calculate the next non-destructive revision number for an uncertainty analysis."""
+    conn = get_db_connection()
+    if base_id and str(base_id).strip():
+        prefix = str(base_id).strip().split("-R")[0]
+        cursor = conn.execute(
+            "SELECT MAX(revision_number) FROM uncertainty_analyses WHERE analysis_id LIKE ?;",
+            (f"{prefix}-R%",),
+        )
+    else:
+        cursor = conn.execute(
+            "SELECT MAX(revision_number) FROM uncertainty_analyses WHERE case_id = ?;",
+            (case_id,),
+        )
+    row = cursor.fetchone()
+    conn.close()
+    curr = row[0] if (row and row[0] is not None) else 0
+    return int(curr) + 1
+
+
+def generate_uncertainty_analysis_id(case_id: str, revision: int = 1) -> str:
+    """Generate unique ID: UNC-YYYY-NNNN-R<rev>."""
+    year = datetime.now().year
+    rand_num = random.randint(1000, 9999)
+    return f"UNC-{year}-{rand_num:04d}-R{int(revision)}"
+
+
+def create_uncertainty_analysis_record(
+    case_id: str,
+    width: float,
+    length: float,
+    analysis_data: Dict[str, Any],
+    stain_id: Optional[int] = None,
+    stain_label: Optional[str] = None,
+    width_uncertainty: Optional[float] = None,
+    length_uncertainty: Optional[float] = None,
+    correlation: float = 0.0,
+    scale_factor: float = 1.0,
+    scale_uncertainty: float = 0.0,
+    uncertainty_source: str = "Automated Estimation",
+    is_manual: bool = False,
+    iterations: int = 10000,
+    random_seed: int = 42,
+    distribution: str = "normal",
+    perturbation_percentage: float = 5.0,
+    parent_analysis_id: Optional[str] = None,
+    examiner_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Insert a new Phase 5.3 uncertainty analysis record with audit log tracking."""
+    conn = get_db_connection()
+    try:
+        rev = get_next_uncertainty_analysis_revision(case_id, base_id=parent_analysis_id)
+        if parent_analysis_id and "-R" in parent_analysis_id:
+            base_prefix = parent_analysis_id.split("-R")[0]
+            analysis_id = f"{base_prefix}-R{rev}"
+        else:
+            analysis_id = generate_uncertainty_analysis_id(case_id, revision=rev)
+
+        label = stain_label.strip() if stain_label else "Stain-01"
+        data_json = json.dumps(analysis_data)
+
+        conn.execute(
+            """
+            INSERT INTO uncertainty_analyses (
+                analysis_id, case_id, stain_id, stain_label, revision_number,
+                parent_analysis_id, width, length, width_uncertainty, length_uncertainty,
+                correlation, scale_factor, scale_uncertainty, uncertainty_source,
+                is_manual, iterations, random_seed, distribution,
+                perturbation_percentage, analysis_data_json, review_status,
+                examiner_name
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            (
+                analysis_id,
+                case_id,
+                stain_id,
+                label,
+                rev,
+                parent_analysis_id,
+                float(width),
+                float(length),
+                float(width_uncertainty) if width_uncertainty is not None else None,
+                float(length_uncertainty) if length_uncertainty is not None else None,
+                float(correlation),
+                float(scale_factor),
+                float(scale_uncertainty),
+                str(uncertainty_source),
+                1 if is_manual else 0,
+                int(iterations),
+                int(random_seed) if random_seed is not None else 42,
+                str(distribution),
+                float(perturbation_percentage),
+                data_json,
+                "Preliminary — Examiner Review Required",
+                examiner_name,
+            ),
+        )
+
+        log_audit_event(
+            action_type="UNCERTAINTY_ANALYSIS_EXECUTED",
+            entity_type="uncertainty_analysis",
+            entity_id=analysis_id,
+            case_id=case_id,
+            details=f"Uncertainty analysis created for {label} (W={width}, L={length}, rev=R{rev})",
+            conn=conn,
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    res = get_uncertainty_analysis_by_id(analysis_id)
+    if not res:
+        raise RuntimeError(f"Failed to retrieve newly created uncertainty analysis '{analysis_id}'.")
+    return res
+
+
+def update_uncertainty_analysis_review(
+    analysis_id: str,
+    review_status: str,
+    examiner_name: str,
+    examiner_notes: str = "",
+) -> Dict[str, Any]:
+    """Record forensic examiner review sign-off on an uncertainty analysis."""
+    if not analysis_id or not str(analysis_id).strip():
+        raise ValueError("analysis_id is required.")
+
+    existing = get_uncertainty_analysis_by_id(analysis_id)
+    if not existing:
+        raise ValueError(f"Uncertainty analysis '{analysis_id}' not found.")
+
+    conn = get_db_connection()
+    try:
+        now_ts = datetime.now().isoformat()
+        new_name = examiner_name.strip() if examiner_name else existing.get("examiner_name")
+
+        conn.execute(
+            """
+            UPDATE uncertainty_analyses
+            SET review_status = ?,
+                examiner_name = ?,
+                examiner_notes = ?,
+                reviewed_at = ?
+            WHERE analysis_id = ?;
+            """,
+            (review_status.strip(), new_name, examiner_notes.strip(), now_ts, analysis_id.strip()),
+        )
+
+        log_audit_event(
+            action_type="UNCERTAINTY_REVIEW_SAVED",
+            entity_type="uncertainty_analysis",
+            entity_id=analysis_id.strip(),
+            case_id=existing["case_id"],
+            details=f"Review updated: Status={review_status}, Examiner={new_name or 'Unknown'}",
+            conn=conn,
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    res = get_uncertainty_analysis_by_id(analysis_id)
+    if not res:
+        raise ValueError(f"Could not retrieve updated analysis '{analysis_id}'.")
+    return res
+
+
+def get_uncertainty_analysis_by_id(analysis_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve an uncertainty analysis record by analysis_id."""
+    if not analysis_id or not str(analysis_id).strip():
+        return None
+    conn = get_db_connection()
+    cursor = conn.execute(
+        """
+        SELECT ua.*, c.title AS case_title, c.case_id AS case_ref
+        FROM uncertainty_analyses ua
+        JOIN cases c ON ua.case_id = c.case_id
+        WHERE ua.analysis_id = ?;
+        """,
+        (str(analysis_id).strip(),),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_uncertainty_analyses_for_case(case_id: str) -> List[Dict[str, Any]]:
+    """Retrieve all uncertainty analyses for a given case_id ordered newest first."""
+    if not case_id or not str(case_id).strip():
+        return []
+    conn = get_db_connection()
+    cursor = conn.execute(
+        """
+        SELECT ua.*, c.title AS case_title
+        FROM uncertainty_analyses ua
+        JOIN cases c ON ua.case_id = c.case_id
+        WHERE ua.case_id = ?
+        ORDER BY ua.id DESC;
+        """,
+        (str(case_id).strip(),),
+    )
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_uncertainty_analyses_for_stain(stain_id: int) -> List[Dict[str, Any]]:
+    """Retrieve all uncertainty analyses for a specific stain/measurement record."""
+    if not stain_id:
+        return []
+    conn = get_db_connection()
+    cursor = conn.execute(
+        """
+        SELECT ua.*, c.title AS case_title
+        FROM uncertainty_analyses ua
+        JOIN cases c ON ua.case_id = c.case_id
+        WHERE ua.stain_id = ?
+        ORDER BY ua.id DESC;
+        """,
+        (int(stain_id),),
+    )
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
 
 
 

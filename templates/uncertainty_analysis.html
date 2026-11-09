@@ -1,0 +1,666 @@
+{% extends "base.html" %}
+
+{% block title %}Uncertainty &amp; Sensitivity Analysis — {{ case.case_id }}{% endblock %}
+{% block breadcrumb %}Forensic Workspaces / Uncertainty &amp; Sensitivity / {{ case.case_id }}{% endblock %}
+
+{% block content %}
+<!-- Top Header & Mandatory Forensic Uncertainty Governance Notice -->
+<div class="card" style="margin-bottom: 18px; border-left: 4px solid #38bdf8;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 14px;">
+        <div>
+            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex-wrap: wrap;">
+                <span class="case-id-badge">{{ case.case_id }}</span>
+                <span class="badge" style="background-color: rgba(56,189,248,0.16); color: #38bdf8; border: 1px solid rgba(56,189,248,0.35);">
+                    Phase 5.3 — Advanced Uncertainty &amp; Sensitivity Analysis
+                </span>
+                <span class="badge" style="background-color: rgba(52,211,153,0.16); color: #34d399; border: 1px solid rgba(52,211,153,0.35);">
+                    Analytical Error Propagation &amp; Monte Carlo
+                </span>
+            </div>
+            <h1 class="card-title" style="font-size: 19px;">
+                <span>📊</span> Measurement Uncertainty &amp; Sensitivity Laboratory
+            </h1>
+            <p style="color: var(--text-secondary); font-size: 13px; margin-top: 4px; max-width: 960px;">
+                Quantify measurement dispersion, propagate analytical error bounds through the non-linear impact-angle arcsin transformation,
+                execute vectorized Monte Carlo simulations, and investigate parameter sensitivity via normalized elasticity indices and tornado charts.
+            </p>
+        </div>
+
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <a href="{{ url_for('case_detail', case_id=case.case_id) }}" class="btn btn-secondary btn-sm">
+                📁 Case File
+            </a>
+            <a href="{{ url_for('measurement_workspace') }}?case_id={{ case.case_id }}" class="btn btn-secondary btn-sm">
+                📐 Measurement Lab
+            </a>
+            <a href="{{ url_for('pattern_analysis_workspace', case_id=case.case_id) }}" class="btn btn-secondary btn-sm">
+                🧬 Pattern Classification
+            </a>
+            <a href="{{ url_for('overlap_analysis_workspace', case_id=case.case_id) }}" class="btn btn-secondary btn-sm">
+                🧩 Complex Overlap
+            </a>
+        </div>
+    </div>
+
+    <!-- Forensic Uncertainty Governance Callout -->
+    <div style="margin-top: 14px; padding: 12px 14px; background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: var(--radius-sm); font-size: 12px; color: var(--text-secondary); line-height: 1.55;">
+        <strong style="color: #38bdf8;">Forensic Methodology Notice:</strong>
+        Impact angle estimates ($\theta = \arcsin(W/L)$) assume an idealized elliptical droplet on a flat surface.
+        Analytical error propagation utilizes first-order Taylor expansion partial derivatives ($\partial\theta/\partial W$, $\partial\theta/\partial L$);
+        Monte Carlo simulation models parameter dispersion across $N$ draws.
+        <strong style="color: #fcd34d;">Neither simulation intervals nor analytical error bounds represent an absolute physical probability of incident deposition.</strong>
+        Isotropic pixel calibration cancels in the dimensionless ratio $W/L$, meaning scale uncertainty affects physical dimensions but not the calculated angle.
+    </div>
+</div>
+
+<!-- Interactive Measurement & Uncertainty Input Panel -->
+<div class="card" style="margin-bottom: 18px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 14px;">
+        <h2 class="card-title" style="font-size: 15.5px;">
+            <span>📐</span> 1. Stain Measurement &amp; Uncertainty Parameter Configuration
+        </h2>
+        {% if active_analysis %}
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="badge" style="background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-subtle);">
+                    Active Analysis: <strong>{{ active_analysis.analysis_id }}</strong> (Rev R{{ active_analysis.revision_number }})
+                </span>
+                <span class="status-pill {% if 'Approved' in active_analysis.review_status %}status-completed{% elif 'Provisional' in active_analysis.review_status %}status-review{% else %}status-active{% endif %}">
+                    ● {{ active_analysis.review_status }}
+                </span>
+            </div>
+        {% endif %}
+    </div>
+
+    <!-- Quick Preset Buttons -->
+    <div style="margin-bottom: 14px; padding: 10px 12px; background: rgba(30, 41, 59, 0.45); border-radius: var(--radius-sm); display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+        <span style="font-size: 11.5px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Quick Presets:</span>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="applyPreset(3.42, 10.0, 0.10, 0.20, 'Glancing 20°')">
+            🔴 Glancing Impact (20°)
+        </button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="applyPreset(7.07, 10.0, 0.15, 0.20, 'Oblique 45°')">
+            🟡 Intermediate Oblique (45°)
+        </button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="applyPreset(9.40, 10.0, 0.10, 0.15, 'Steep 70°')">
+            🟢 Steep Impact (70°)
+        </button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="applyPreset(9.96, 10.0, 0.08, 0.10, 'Near-Perp 85°')">
+            🔵 Near-Perpendicular (85°)
+        </button>
+    </div>
+
+    <form method="POST" action="{{ url_for('uncertainty_analysis_run_route', case_id=case.case_id) }}">
+        <!-- Stain Preload Dropdown (if case has measurements) -->
+        {% if case_measurements %}
+            <div style="margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px dashed var(--border-subtle);">
+                <label for="stain_select" class="form-label" style="font-size: 12px; font-weight: 600;">
+                    Or Pre-load Measurements from Logged Case Stain:
+                </label>
+                <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                    <select id="stain_select" class="form-control" style="flex: 1; min-width: 280px;" onchange="onStainSelect(this)">
+                        <option value="">-- Choose Logged Stain to Populate --</option>
+                        {% for m in case_measurements %}
+                            <option value="{{ m.id }}" data-label="{{ m.stain_label }}" data-w="{{ m.width }}" data-l="{{ m.length }}" data-scale="{{ m.scale_factor or 1.0 }}">
+                                {{ m.stain_label }} — W: {{ '%.2f'|format(m.width) }} mm, L: {{ '%.2f'|format(m.length) }} mm (Angle: {{ '%.2f'|format(m.angle_degrees) }}°)
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+        {% endif %}
+
+        <input type="hidden" name="stain_id" id="input_stain_id" value="{{ current_inputs.stain_id or '' }}">
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin-bottom: 14px;">
+            <div>
+                <label for="input_stain_label" class="form-label" style="font-size: 12px; font-weight: 600;">
+                    Stain Label / Identifier:
+                </label>
+                <input type="text" name="stain_label" id="input_stain_label" class="form-control"
+                       value="{{ current_inputs.stain_label or 'Stain-01' }}" required>
+            </div>
+
+            <div>
+                <label for="input_width" class="form-label" style="font-size: 12px; font-weight: 600;">
+                    Stain Width (W, minor axis):
+                </label>
+                <input type="number" step="any" min="0.001" name="width" id="input_width" class="form-control"
+                       value="{{ current_inputs.width or '5.0' }}" required>
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">Transverse dimension (mm or px)</div>
+            </div>
+
+            <div>
+                <label for="input_length" class="form-label" style="font-size: 12px; font-weight: 600;">
+                    Stain Length (L, major axis):
+                </label>
+                <input type="number" step="any" min="0.001" name="length" id="input_length" class="form-control"
+                       value="{{ current_inputs.length or '10.0' }}" required>
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">Major axis excluding spines (L &ge; W)</div>
+            </div>
+
+            <div>
+                <label for="input_w_unc" class="form-label" style="font-size: 12px; font-weight: 600;">
+                    Width Uncertainty (&sigma;<sub>W</sub>):
+                </label>
+                <input type="number" step="any" min="0.0" name="width_uncertainty" id="input_w_unc" class="form-control"
+                       value="{{ current_inputs.width_uncertainty if current_inputs.width_uncertainty is not none else '0.10' }}">
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">Standard uncertainty 1&sigma; (optional)</div>
+            </div>
+
+            <div>
+                <label for="input_l_unc" class="form-label" style="font-size: 12px; font-weight: 600;">
+                    Length Uncertainty (&sigma;<sub>L</sub>):
+                </label>
+                <input type="number" step="any" min="0.0" name="length_uncertainty" id="input_l_unc" class="form-control"
+                       value="{{ current_inputs.length_uncertainty if current_inputs.length_uncertainty is not none else '0.20' }}">
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">Standard uncertainty 1&sigma; (optional)</div>
+            </div>
+
+            <div>
+                <label for="input_correlation" class="form-label" style="font-size: 12px; font-weight: 600;">
+                    Axis Correlation (&rho;<sub>WL</sub>):
+                </label>
+                <input type="number" step="0.05" min="-1.0" max="1.0" name="correlation" id="input_correlation" class="form-control"
+                       value="{{ current_inputs.correlation or '0.0' }}">
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">Correlation coeff [-1.0, 1.0]</div>
+            </div>
+
+            <div>
+                <label for="input_scale" class="form-label" style="font-size: 12px; font-weight: 600;">
+                    Calibration Scale (s):
+                </label>
+                <input type="number" step="any" min="0.0001" name="scale_factor" id="input_scale" class="form-control"
+                       value="{{ current_inputs.scale_factor or '1.0' }}">
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">mm per pixel scale (default 1.0)</div>
+            </div>
+
+            <div>
+                <label for="input_scale_unc" class="form-label" style="font-size: 12px; font-weight: 600;">
+                    Scale Uncertainty (&sigma;<sub>s</sub>):
+                </label>
+                <input type="number" step="any" min="0.0" name="scale_uncertainty" id="input_scale_unc" class="form-control"
+                       value="{{ current_inputs.scale_uncertainty or '0.0' }}">
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">Affects physical mm dimensions</div>
+            </div>
+        </div>
+
+        <!-- Simulation and Advanced Settings -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin-bottom: 16px; padding: 12px; background: rgba(15, 23, 42, 0.4); border-radius: var(--radius-sm);">
+            <div>
+                <label for="input_source" class="form-label" style="font-size: 12px; font-weight: 600;">Uncertainty Source:</label>
+                <select name="uncertainty_source" id="input_source" class="form-control">
+                    <option value="Automated (OpenCV Residual)">Automated (OpenCV Least-Squares Residual)</option>
+                    <option value="Examiner Optical Graticule (±0.05 mm)">Examiner Optical Graticule (±0.05 mm)</option>
+                    <option value="Digital Caliper NIST-Traceable (±0.02 mm)">Digital Caliper NIST-Traceable (±0.02 mm)</option>
+                    <option value="Manual Examiner Estimation">Manual Examiner Estimation</option>
+                </select>
+            </div>
+
+            <div>
+                <label for="input_iterations" class="form-label" style="font-size: 12px; font-weight: 600;">Monte Carlo Iterations (N):</label>
+                <select name="iterations" id="input_iterations" class="form-control">
+                    <option value="1000">1,000 Draws (Fast preview)</option>
+                    <option value="5000">5,000 Draws</option>
+                    <option value="10000" selected>10,000 Draws (Standard forensic)</option>
+                    <option value="50000">50,000 Draws (High precision)</option>
+                </select>
+            </div>
+
+            <div>
+                <label for="input_dist" class="form-label" style="font-size: 12px; font-weight: 600;">Probability Distribution:</label>
+                <select name="distribution" id="input_dist" class="form-control">
+                    <option value="normal" selected>Normal / Gaussian N(μ, σ)</option>
+                    <option value="uniform">Uniform U(a, b)</option>
+                </select>
+            </div>
+
+            <div>
+                <label for="input_seed" class="form-label" style="font-size: 12px; font-weight: 600;">Reproducible Seed:</label>
+                <input type="number" name="random_seed" id="input_seed" class="form-control" value="42">
+            </div>
+
+            <div>
+                <label for="input_pert" class="form-label" style="font-size: 12px; font-weight: 600;">Sensitivity Perturbation (%):</label>
+                <input type="number" step="1.0" min="1.0" max="25.0" name="perturbation_percentage" id="input_pert" class="form-control" value="5.0">
+            </div>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end;">
+            <button type="submit" class="btn btn-primary" style="padding: 10px 22px; font-weight: 700; font-size: 13.5px;">
+                <span>⚡</span> Run Uncertainty &amp; Sensitivity Analysis
+            </button>
+        </div>
+    </form>
+</div>
+
+{% if analyses %}
+    <!-- Revision History Selector -->
+    <div class="card" style="margin-bottom: 18px; padding: 12px 18px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+            <div style="font-size: 13px; font-weight: 600; color: var(--text-secondary);">
+                <span>📜</span> Historical Analyses for Case {{ case.case_id }}:
+            </div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                {% for a in analyses %}
+                    <a href="{{ url_for('uncertainty_analysis_workspace', case_id=case.case_id, analysis_id=a.analysis_id) }}"
+                       class="btn btn-sm {% if active_analysis and active_analysis.analysis_id == a.analysis_id %}btn-primary{% else %}btn-secondary{% endif %}"
+                       style="font-family: var(--font-mono); font-size: 11.5px;">
+                        {{ a.analysis_id }} ({{ a.stain_label }}) — {{ a.review_status }}
+                    </a>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+{% endif %}
+
+{% if analysis_data %}
+    {% set inputs = analysis_data.inputs %}
+    {% set analytical = analysis_data.analytical %}
+    {% set mc = analysis_data.monte_carlo %}
+    {% set sens = analysis_data.sensitivity %}
+    {% set figures = analysis_data.figures %}
+
+    <!-- Top Statistical Overview Cards -->
+    <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); margin-bottom: 18px;">
+        <div class="stat-card">
+            <div class="stat-content">
+                <div class="stat-label">Nominal Impact Angle</div>
+                <div class="stat-value" style="color: #38bdf8;">{{ analytical.angle_degrees }}°</div>
+                <div class="stat-meta">Ratio W/L = {{ analytical.ratio }}</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-content">
+                <div class="stat-label">Analytical Uncertainty</div>
+                <div class="stat-value" style="color: #fbbf24;">
+                    {% if analytical.sigma_theta_deg is not none %}
+                        &plusmn;{{ analytical.sigma_theta_deg }}°
+                    {% else %}
+                        <span style="font-size: 13px; color: var(--text-muted);">Unavailable</span>
+                    {% endif %}
+                </div>
+                <div class="stat-meta">1&sigma; Gaussian bound</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-content">
+                <div class="stat-label">Monte Carlo Mean</div>
+                <div class="stat-value" style="color: #34d399;">
+                    {% if mc.status == 'valid' %}
+                        {{ mc.mean_angle_deg }}°
+                    {% else %}
+                        <span style="font-size: 13px; color: var(--text-muted);">N/A</span>
+                    {% endif %}
+                </div>
+                <div class="stat-meta">Empirical mean (±{{ mc.std_angle_deg if mc.status == 'valid' else '0' }}°)</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-content">
+                <div class="stat-label">MC 95% Interval</div>
+                <div class="stat-value" style="font-size: 14.5px; color: #a78bfa;">
+                    {% if mc.status == 'valid' %}
+                        {{ mc.p2_5_deg }}° – {{ mc.p97_5_deg }}°
+                    {% else %}
+                        <span style="font-size: 13px; color: var(--text-muted);">N/A</span>
+                    {% endif %}
+                </div>
+                <div class="stat-meta">Width: {{ mc.interval_width_95_deg if mc.status == 'valid' else '0' }}°</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-content">
+                <div class="stat-label">Most Influential Input</div>
+                <div class="stat-value" style="font-size: 13.5px; color: #f87171;">{{ sens.most_influential_parameter }}</div>
+                <div class="stat-meta">Sensitivity ranking</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Section A & B: Measurement Summary & Analytical Propagation -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 16px; margin-bottom: 18px;">
+        <!-- Card A: Measurement Summary & Calibration Assessment -->
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title" style="font-size: 15px;">
+                    <span>📐</span> Section A: Measurement &amp; Calibration Summary
+                </h3>
+                <span class="badge" style="background: rgba(56,189,248,0.15); color: #38bdf8;">
+                    {{ analysis_data.uncertainty_source }}
+                </span>
+            </div>
+
+            <div class="table-responsive">
+                <table class="data-table" style="font-size: 12.5px;">
+                    <thead>
+                        <tr>
+                            <th>Parameter</th>
+                            <th>Measured Value</th>
+                            <th>Standard Uncertainty (1&sigma;)</th>
+                            <th>68.3% Physical Range</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>Stain Width (W)</strong></td>
+                            <td>{{ inputs.width }} mm</td>
+                            <td>
+                                {% if inputs.width_uncertainty is not none %}
+                                    &plusmn;{{ inputs.width_uncertainty }} mm
+                                {% else %}
+                                    <span style="color: var(--text-muted); font-style: italic;">Unavailable / Not Provided</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if inputs.width_uncertainty is not none %}
+                                    [{{ '%.2f'|format(inputs.width - inputs.width_uncertainty) }}, {{ '%.2f'|format(inputs.width + inputs.width_uncertainty) }}] mm
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><strong>Stain Length (L)</strong></td>
+                            <td>{{ inputs.length }} mm</td>
+                            <td>
+                                {% if inputs.length_uncertainty is not none %}
+                                    &plusmn;{{ inputs.length_uncertainty }} mm
+                                {% else %}
+                                    <span style="color: var(--text-muted); font-style: italic;">Unavailable / Not Provided</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if inputs.length_uncertainty is not none %}
+                                    [{{ '%.2f'|format(inputs.length - inputs.length_uncertainty) }}, {{ '%.2f'|format(inputs.length + inputs.length_uncertainty) }}] mm
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><strong>Axis Ratio (W / L)</strong></td>
+                            <td>{{ analytical.ratio }}</td>
+                            <td>—</td>
+                            <td>&le; 1.0 (Elliptical Domain)</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Scale Factor (s)</strong></td>
+                            <td>{{ inputs.scale_factor }} mm/px</td>
+                            <td>&plusmn;{{ inputs.scale_uncertainty }} mm/px</td>
+                            <td>Physical Dimension Scaling Only</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div style="margin-top: 12px; padding: 8px 12px; background: rgba(30, 41, 59, 0.4); border-radius: var(--radius-sm); font-size: 11.5px; color: var(--text-secondary);">
+                <strong style="color: #38bdf8;">Scale Invariance Principle:</strong>
+                {{ analytical.scale_invariance_note }}
+            </div>
+        </div>
+
+        <!-- Card B: Analytical Error Propagation -->
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title" style="font-size: 15px;">
+                    <span>🧮</span> Section B: Analytical Impact Angle Error Propagation
+                </h3>
+                <span class="badge" style="background: rgba(52,211,153,0.15); color: #34d399;">
+                    First-Order Taylor Expansion
+                </span>
+            </div>
+
+            {% if analytical.status == 'valid' %}
+                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 12px;">
+                    <div style="background: #090d16; padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+                        <div style="font-size: 11px; color: var(--text-muted);">Baseline Angle (&theta;<sub>0</sub>)</div>
+                        <div style="font-size: 20px; font-weight: 700; color: #38bdf8;">{{ analytical.angle_degrees }}°</div>
+                        <div style="font-size: 11px; color: var(--text-secondary);">{{ analytical.angle_radians }} radians</div>
+                    </div>
+                    <div style="background: #090d16; padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+                        <div style="font-size: 11px; color: var(--text-muted);">Propagated Uncertainty (&sigma;<sub>&theta;</sub>)</div>
+                        <div style="font-size: 20px; font-weight: 700; color: #fbbf24;">&plusmn;{{ analytical.sigma_theta_deg }}°</div>
+                        <div style="font-size: 11px; color: var(--text-secondary);">&plusmn;{{ analytical.sigma_theta_rad }} rad</div>
+                    </div>
+                    <div style="background: #090d16; padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+                        <div style="font-size: 11px; color: var(--text-muted);">68.3% (1&sigma;) Bound</div>
+                        <div style="font-size: 14px; font-weight: 700; color: #f8fafc;">
+                            {{ analytical.lower_bound_1sigma_deg }}° – {{ analytical.upper_bound_1sigma_deg }}°
+                        </div>
+                    </div>
+                    <div style="background: #090d16; padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+                        <div style="font-size: 11px; color: var(--text-muted);">95.4% (2&sigma;) Bound</div>
+                        <div style="font-size: 14px; font-weight: 700; color: #a78bfa;">
+                            {{ analytical.lower_bound_2sigma_deg }}° – {{ analytical.upper_bound_2sigma_deg }}°
+                        </div>
+                    </div>
+                </div>
+
+                <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">
+                    <strong>Evaluated Partial Derivatives:</strong>
+                </div>
+                <div style="background: #090d16; padding: 8px 12px; border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 11.5px; color: #cbd5e1; border: 1px solid var(--border-subtle);">
+                    &part;&theta;/&part;W = {{ analytical.d_theta_dw }} rad/mm &nbsp;|&nbsp;
+                    &part;&theta;/&part;L = {{ analytical.d_theta_dl }} rad/mm &nbsp;|&nbsp;
+                    &rho;<sub>WL</sub> = {{ inputs.correlation }}
+                </div>
+            {% else %}
+                <div style="padding: 24px; text-align: center; color: var(--text-muted);">
+                    <div style="font-size: 28px; margin-bottom: 8px;">ℹ️</div>
+                    <div style="font-size: 13px; font-weight: 600; color: #fbbf24; margin-bottom: 4px;">Uncertainty Parameters Not Provided</div>
+                    <div style="font-size: 12px;">{{ analytical.message }}</div>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Section C & D: Monte Carlo Simulation & Sensitivity Analysis -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 16px; margin-bottom: 18px;">
+        <!-- Card C: Monte Carlo Simulation -->
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title" style="font-size: 15px;">
+                    <span>🎲</span> Section C: Monte Carlo Uncertainty Simulation
+                </h3>
+                {% if mc.status == 'valid' %}
+                    <span class="badge" style="background: rgba(167,139,250,0.15); color: #a78bfa;">
+                        {{ mc.iterations }} Iterations (Seed: {{ mc.seed }})
+                    </span>
+                {% endif %}
+            </div>
+
+            {% if mc.status == 'valid' %}
+                <!-- Histogram Figure -->
+                <div style="text-align: center; margin-bottom: 12px; background: #000; border-radius: var(--radius-sm); overflow: hidden;">
+                    {% if figures.histogram_b64 %}
+                        <img src="{{ figures.histogram_b64 }}" alt="Monte Carlo Histogram" style="max-width: 100%; height: auto; display: block;">
+                    {% endif %}
+                </div>
+
+                <!-- MC Quantile Metrics Grid -->
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; font-size: 11.5px; text-align: center;">
+                    <div style="background: #090d16; padding: 6px; border-radius: 4px; border: 1px solid var(--border-subtle);">
+                        <div style="color: var(--text-muted);">Valid Draws</div>
+                        <div style="font-weight: 700; color: #34d399;">{{ mc.valid_count }} ({{ '%.1f'|format(100.0 - mc.invalid_percentage) }}%)</div>
+                    </div>
+                    <div style="background: #090d16; padding: 6px; border-radius: 4px; border: 1px solid var(--border-subtle);">
+                        <div style="color: var(--text-muted);">Invalid Draws</div>
+                        <div style="font-weight: 700; {% if mc.invalid_count > 0 %}color: #f87171;{% else %}color: var(--text-secondary);{% endif %}">
+                            {{ mc.invalid_count }} ({{ mc.invalid_percentage }}%)
+                        </div>
+                    </div>
+                    <div style="background: #090d16; padding: 6px; border-radius: 4px; border: 1px solid var(--border-subtle);">
+                        <div style="color: var(--text-muted);">Median (Q2)</div>
+                        <div style="font-weight: 700; color: #f8fafc;">{{ mc.median_angle_deg }}°</div>
+                    </div>
+                    <div style="background: #090d16; padding: 6px; border-radius: 4px; border: 1px solid var(--border-subtle);">
+                        <div style="color: var(--text-muted);">Min / Max</div>
+                        <div style="font-weight: 700; color: #cbd5e1;">{{ mc.min_angle_deg }}° / {{ mc.max_angle_deg }}°</div>
+                    </div>
+                    <div style="background: #090d16; padding: 6px; border-radius: 4px; border: 1px solid var(--border-subtle);">
+                        <div style="color: var(--text-muted);">95% Interval</div>
+                        <div style="font-weight: 700; color: #a78bfa;">[{{ mc.p2_5_deg }}°, {{ mc.p97_5_deg }}°]</div>
+                    </div>
+                </div>
+
+                <div style="margin-top: 10px; font-size: 11px; color: var(--text-secondary); font-style: italic;">
+                    * {{ mc.forensic_disclaimer }}
+                </div>
+            {% else %}
+                <div style="padding: 24px; text-align: center; color: var(--text-muted);">
+                    <div style="font-size: 28px; margin-bottom: 8px;">ℹ️</div>
+                    <div style="font-size: 13px; font-weight: 600; color: #fbbf24; margin-bottom: 4px;">Monte Carlo Inactive</div>
+                    <div style="font-size: 12px;">{{ mc.message }}</div>
+                </div>
+            {% endif %}
+        </div>
+
+        <!-- Card D: Sensitivity Analysis & Tornado Chart -->
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title" style="font-size: 15px;">
+                    <span>🌪️</span> Section D: Sensitivity Analysis &amp; Tornado Chart
+                </h3>
+                <span class="badge" style="background: rgba(245,158,11,0.15); color: #f59e0b;">
+                    &plusmn;{{ sens.perturbation_percentage }}% Local Perturbation
+                </span>
+            </div>
+
+            <!-- Tornado Figure -->
+            <div style="text-align: center; margin-bottom: 12px; background: #000; border-radius: var(--radius-sm); overflow: hidden;">
+                {% if figures.tornado_b64 %}
+                    <img src="{{ figures.tornado_b64 }}" alt="Tornado Sensitivity Chart" style="max-width: 100%; height: auto; display: block;">
+                {% endif %}
+            </div>
+
+            <!-- Parameter Ranking Table -->
+            <div class="table-responsive">
+                <table class="data-table" style="font-size: 12px;">
+                    <thead>
+                        <tr>
+                            <th>Rank</th>
+                            <th>Parameter</th>
+                            <th>Base</th>
+                            <th>Low &rarr; High Perturbation</th>
+                            <th>Impact Swing (&Delta;&theta;)</th>
+                            <th>Elasticity (S<sub>x</sub>)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for p in sens.parameters %}
+                            <tr>
+                                <td>
+                                    <span class="badge" style="{% if loop.first %}background: rgba(239,68,68,0.2); color: #f87171;{% else %}background: var(--bg-surface); color: var(--text-muted);{% endif %}">
+                                        #{{ loop.index }}
+                                    </span>
+                                </td>
+                                <td><strong>{{ p.name }}</strong></td>
+                                <td>{{ p.baseline }} {{ p.unit }}</td>
+                                <td>{{ p.theta_at_low }}° &rarr; {{ p.theta_at_high }}°</td>
+                                <td style="font-weight: 700; color: #34d399;">{{ p.swing_deg }}°</td>
+                                <td>
+                                    {% if p.elasticity is not none %}
+                                        {{ p.elasticity }}
+                                    {% else %}
+                                        —
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <div style="margin-top: 10px; font-size: 11px; color: var(--text-secondary);">
+                <strong>Elasticity Symmetry Note:</strong> {{ sens.elasticity_symmetry_note }}
+            </div>
+        </div>
+    </div>
+
+    <!-- Section E: Forensic Examiner Review & Non-Destructive Sign-off -->
+    <div class="card" style="margin-bottom: 24px; border-left: 4px solid #34d399;">
+        <div class="card-header">
+            <div>
+                <h3 class="card-title" style="font-size: 16px;">
+                    <span>✍️</span> Section E: Forensic Examiner Review &amp; Analysis Governance
+                </h3>
+                <p style="color: var(--text-secondary); font-size: 12.5px; margin-top: 2px;">
+                    Record formal examiner findings, methodology justifications, and case conclusions under ISO/IEC 17025 standards.
+                </p>
+            </div>
+            <div>
+                {% if active_analysis and active_analysis.reviewed_at %}
+                    <span class="badge" style="background: rgba(52,211,153,0.15); color: #34d399;">
+                        Reviewed on {{ active_analysis.reviewed_at }}
+                    </span>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if active_analysis %}
+            <form method="POST" action="{{ url_for('uncertainty_analysis_review_route', case_id=case.case_id, analysis_id=active_analysis.analysis_id) }}">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-bottom: 14px;">
+                    <div>
+                        <label for="review_status" class="form-label" style="font-size: 12px; font-weight: 600;">Examiner Governance Status:</label>
+                        <select name="review_status" id="review_status" class="form-control">
+                            <option value="Examiner Approved" {% if active_analysis.review_status == 'Examiner Approved' %}selected{% endif %}>
+                                ✅ Examiner Approved (Verified for Trajectory Reconstruction)
+                            </option>
+                            <option value="Provisional — Flagged for Verification" {% if 'Provisional' in active_analysis.review_status %}selected{% endif %}>
+                                ⚠️ Provisional — Flagged for Optical Verification
+                            </option>
+                            <option value="Rejected / Excluded from Incident Modeling" {% if 'Rejected' in active_analysis.review_status %}selected{% endif %}>
+                                ❌ Rejected / Excluded from Incident Modeling
+                            </option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="examiner_name" class="form-label" style="font-size: 12px; font-weight: 600;">Certified Examiner Name:</label>
+                        <input type="text" name="examiner_name" id="examiner_name" class="form-control"
+                               value="{{ active_analysis.examiner_name or case.examiner or '' }}" required>
+                    </div>
+                </div>
+
+                <div style="margin-bottom: 14px;">
+                    <label for="examiner_notes" class="form-label" style="font-size: 12px; font-weight: 600;">Examiner Observations &amp; Methodological Justification:</label>
+                    <textarea name="examiner_notes" id="examiner_notes" class="form-control" rows="3"
+                              placeholder="Detail optical evidence quality, graticule calibration checks, reasons for variance, or justification for parameter inclusion...">{{ active_analysis.examiner_notes or '' }}</textarea>
+                </div>
+
+                <div style="display: flex; justify-content: flex-end;">
+                    <button type="submit" class="btn btn-primary" style="padding: 9px 20px; font-weight: 700;">
+                        <span>💾</span> Save Examiner Review &amp; Sign-off
+                    </button>
+                </div>
+            </form>
+        {% else %}
+            <div style="color: var(--text-muted); font-size: 12.5px;">
+                Execute an analysis above to generate a persistent review record for case {{ case.case_id }}.
+            </div>
+        {% endif %}
+    </div>
+{% endif %}
+
+<script>
+function applyPreset(w, l, w_unc, l_unc, label) {
+    document.getElementById('input_width').value = w;
+    document.getElementById('input_length').value = l;
+    document.getElementById('input_w_unc').value = w_unc;
+    document.getElementById('input_l_unc').value = l_unc;
+    document.getElementById('input_stain_label').value = 'Preset-' + label.replace(/[^a-zA-Z0-9]/g, '');
+}
+
+function onStainSelect(sel) {
+    const opt = sel.options[sel.selectedIndex];
+    if (!opt || !opt.value) return;
+    document.getElementById('input_stain_id').value = opt.value;
+    document.getElementById('input_stain_label').value = opt.getAttribute('data-label') || 'Stain-01';
+    document.getElementById('input_width').value = opt.getAttribute('data-w') || '5.0';
+    document.getElementById('input_length').value = opt.getAttribute('data-l') || '10.0';
+    const scale = opt.getAttribute('data-scale');
+    if (scale) {
+        document.getElementById('input_scale').value = scale;
+    }
+}
+</script>
+{% endblock %}

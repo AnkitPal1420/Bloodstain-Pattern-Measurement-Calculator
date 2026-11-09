@@ -33,6 +33,7 @@ import report_generator
 import trajectory
 import trajectory_integration
 import trajectory_visualization
+import uncertainty_analysis
 from calculator import InvalidMeasurementError, calculate_impact_angle
 from image_processing import ImageProcessingError
 from overlap_analysis import OverlapAnalysisError
@@ -40,6 +41,7 @@ from pattern_analysis import PatternAnalysisError
 from report_generator import ReportGenerationError
 from trajectory import StainTrajectoryInput, TrajectoryError
 from trajectory_integration import ReconstructionValidationError
+from uncertainty_analysis import UncertaintyValidationError
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "bpa-forensic-lab-secret-2026")
@@ -2152,6 +2154,293 @@ def overlap_analysis_review_route(case_id: str, analysis_id: str):
             analysis_id=updated["analysis_id"],
         )
     )
+
+
+# ===========================================================================
+# Phase 5.3: Advanced Uncertainty & Sensitivity Analysis Routes
+# ===========================================================================
+
+
+@app.route("/uncertainty-analysis", methods=["GET"])
+def uncertainty_analysis_index():
+    """Default redirect to the active case or first available forensic case."""
+    all_cases = database.get_all_cases()
+    if not all_cases:
+        flash("No active forensic cases found in the laboratory archive. Please create a case first.", "warning")
+        return redirect(url_for("new_case"))
+
+    default_case_id = "BPA-2026-0101"
+    match = next((c for c in all_cases if c["case_id"] == default_case_id), None)
+    target_case_id = match["case_id"] if match else all_cases[0]["case_id"]
+    return redirect(url_for("uncertainty_analysis_workspace", case_id=target_case_id))
+
+
+@app.route("/uncertainty-analysis/<case_id>", methods=["GET"])
+def uncertainty_analysis_workspace(case_id: str):
+    """
+    Primary workspace for Phase 5.3: Advanced Uncertainty & Sensitivity Analysis.
+    Supports historical revision navigation and preloading logged stain measurements.
+    """
+    case = database.get_case_by_id(case_id)
+    if not case:
+        flash(f"Forensic Case '{case_id}' was not found in the laboratory registry.", "danger")
+        return redirect(url_for("cases_list"))
+
+    case_measurements = database.get_measurements_for_case(case_id)
+    analyses = database.get_uncertainty_analyses_for_case(case_id)
+
+    requested_analysis_id = request.args.get("analysis_id", "").strip()
+    requested_stain_id = request.args.get("stain_id", "").strip()
+
+    active_analysis = None
+    if requested_analysis_id:
+        active_analysis = database.get_uncertainty_analysis_by_id(requested_analysis_id)
+    elif analyses:
+        active_analysis = analyses[0]
+
+    current_inputs: Dict[str, Any] = {
+        "stain_id": "",
+        "stain_label": "Stain-01",
+        "width": 5.0,
+        "length": 10.0,
+        "width_uncertainty": 0.10,
+        "length_uncertainty": 0.20,
+        "correlation": 0.0,
+        "scale_factor": 1.0,
+        "scale_uncertainty": 0.0,
+    }
+
+    analysis_data: Optional[Dict[str, Any]] = None
+
+    if active_analysis and active_analysis.get("analysis_data_json"):
+        try:
+            analysis_data = json.loads(active_analysis["analysis_data_json"])
+            current_inputs["stain_id"] = active_analysis.get("stain_id") or ""
+            current_inputs["stain_label"] = active_analysis.get("stain_label") or "Stain-01"
+            current_inputs["width"] = active_analysis.get("width") or 5.0
+            current_inputs["length"] = active_analysis.get("length") or 10.0
+            current_inputs["width_uncertainty"] = active_analysis.get("width_uncertainty")
+            current_inputs["length_uncertainty"] = active_analysis.get("length_uncertainty")
+            current_inputs["correlation"] = active_analysis.get("correlation") or 0.0
+            current_inputs["scale_factor"] = active_analysis.get("scale_factor") or 1.0
+            current_inputs["scale_uncertainty"] = active_analysis.get("scale_uncertainty") or 0.0
+        except Exception:
+            analysis_data = None
+    elif requested_stain_id:
+        stain_rec = next((m for m in case_measurements if str(m["id"]) == requested_stain_id), None)
+        if stain_rec:
+            current_inputs["stain_id"] = stain_rec["id"]
+            current_inputs["stain_label"] = stain_rec.get("stain_label") or f"Stain-{stain_rec['id']}"
+            current_inputs["width"] = stain_rec["width"]
+            current_inputs["length"] = stain_rec["length"]
+            current_inputs["scale_factor"] = stain_rec.get("scale_factor") or 1.0
+            # Run initial live pipeline
+            analysis_data = uncertainty_analysis.execute_full_uncertainty_analysis(
+                width=float(current_inputs["width"]),
+                length=float(current_inputs["length"]),
+                width_uncertainty=current_inputs["width_uncertainty"],
+                length_uncertainty=current_inputs["length_uncertainty"],
+                correlation=current_inputs["correlation"],
+                scale_factor=current_inputs["scale_factor"],
+                scale_uncertainty=current_inputs["scale_uncertainty"],
+                stain_label=current_inputs["stain_label"],
+            )
+    else:
+        # Pre-generate default laboratory baseline for immediate interactive visualization
+        if case_measurements:
+            first_m = case_measurements[0]
+            current_inputs["stain_id"] = first_m["id"]
+            current_inputs["stain_label"] = first_m.get("stain_label") or "Stain-01"
+            current_inputs["width"] = first_m["width"]
+            current_inputs["length"] = first_m["length"]
+            current_inputs["scale_factor"] = first_m.get("scale_factor") or 1.0
+
+        try:
+            analysis_data = uncertainty_analysis.execute_full_uncertainty_analysis(
+                width=float(current_inputs["width"]),
+                length=float(current_inputs["length"]),
+                width_uncertainty=float(current_inputs["width_uncertainty"]),
+                length_uncertainty=float(current_inputs["length_uncertainty"]),
+                correlation=float(current_inputs["correlation"]),
+                scale_factor=float(current_inputs["scale_factor"]),
+                scale_uncertainty=float(current_inputs["scale_uncertainty"]),
+                stain_label=str(current_inputs["stain_label"]),
+            )
+        except Exception:
+            analysis_data = None
+
+    return render_template(
+        "uncertainty_analysis.html",
+        active_page="uncertainty_analysis",
+        case=case,
+        case_measurements=case_measurements,
+        analyses=analyses,
+        active_analysis=active_analysis,
+        analysis_data=analysis_data,
+        current_inputs=current_inputs,
+    )
+
+
+@app.route("/uncertainty-analysis/<case_id>/analyze", methods=["POST"])
+def uncertainty_analysis_run_route(case_id: str):
+    """Execute end-to-end analytical error propagation, Monte Carlo simulation, and sensitivity analysis."""
+    case = database.get_case_by_id(case_id)
+    if not case:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": f"Case '{case_id}' not found."}), 404
+        abort(404)
+
+    try:
+        stain_id_raw = request.form.get("stain_id", "").strip()
+        stain_id = int(stain_id_raw) if stain_id_raw else None
+        stain_label = request.form.get("stain_label", "Stain-01").strip() or "Stain-01"
+
+        width_raw = request.form.get("width")
+        length_raw = request.form.get("length")
+        w_unc_raw = request.form.get("width_uncertainty")
+        l_unc_raw = request.form.get("length_uncertainty")
+        correlation_raw = request.form.get("correlation", "0.0")
+        scale_factor_raw = request.form.get("scale_factor", "1.0")
+        scale_unc_raw = request.form.get("scale_uncertainty", "0.0")
+
+        iterations_raw = request.form.get("iterations", "10000")
+        seed_raw = request.form.get("random_seed", "42")
+        distribution = request.form.get("distribution", "normal").strip()
+        pert_raw = request.form.get("perturbation_percentage", "5.0")
+        source = request.form.get("uncertainty_source", "Automated (OpenCV Residual)").strip()
+
+        # Parse numeric inputs
+        w_val = float(width_raw) if width_raw is not None else 0.0
+        l_val = float(length_raw) if length_raw is not None else 0.0
+        w_unc_val = float(w_unc_raw) if (w_unc_raw and w_unc_raw.strip()) else None
+        l_unc_val = float(l_unc_raw) if (l_unc_raw and l_unc_raw.strip()) else None
+        rho_val = float(correlation_raw) if correlation_raw else 0.0
+        s_val = float(scale_factor_raw) if scale_factor_raw else 1.0
+        s_unc_val = float(scale_unc_raw) if scale_unc_raw else 0.0
+        n_iter = int(iterations_raw) if iterations_raw else 10000
+        seed_val = int(seed_raw) if (seed_raw and seed_raw.strip()) else 42
+        pert_val = float(pert_raw) if pert_raw else 5.0
+
+        # Execute analysis pipeline
+        analysis_res = uncertainty_analysis.execute_full_uncertainty_analysis(
+            width=w_val,
+            length=l_val,
+            width_uncertainty=w_unc_val,
+            length_uncertainty=l_unc_val,
+            correlation=rho_val,
+            scale_factor=s_val,
+            scale_uncertainty=s_unc_val,
+            iterations=n_iter,
+            seed=seed_val,
+            distribution=distribution,
+            perturbation_pct=pert_val,
+            uncertainty_source=source,
+            stain_label=stain_label,
+        )
+
+        # Persist record in database
+        saved_rec = database.create_uncertainty_analysis_record(
+            case_id=case_id,
+            stain_id=stain_id,
+            stain_label=stain_label,
+            width=w_val,
+            length=l_val,
+            width_uncertainty=w_unc_val,
+            length_uncertainty=l_unc_val,
+            correlation=rho_val,
+            scale_factor=s_val,
+            scale_uncertainty=s_unc_val,
+            uncertainty_source=source,
+            iterations=n_iter,
+            random_seed=seed_val,
+            distribution=distribution,
+            perturbation_percentage=pert_val,
+            analysis_data=analysis_res,
+            examiner_name=case.get("examiner"),
+        )
+
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({
+                "status": "ok",
+                "analysis_id": saved_rec["analysis_id"],
+                "results": analysis_res,
+            }), 201
+
+        flash(
+            f"Uncertainty & Sensitivity Analysis {saved_rec['analysis_id']} (Revision R{saved_rec['revision_number']}) computed successfully: "
+            f"Impact Angle = {analysis_res['analytical']['angle_degrees']}° (±{analysis_res['analytical']['sigma_theta_deg']}° analytical, "
+            f"95% MC Interval = [{analysis_res['monte_carlo'].get('p2_5_deg', 'N/A')}°, {analysis_res['monte_carlo'].get('p97_5_deg', 'N/A')}°]).",
+            "success",
+        )
+        return redirect(
+            url_for(
+                "uncertainty_analysis_workspace",
+                case_id=case_id,
+                analysis_id=saved_rec["analysis_id"],
+            )
+        )
+    except (UncertaintyValidationError, ValueError) as err:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": str(err)}), 400
+        flash(f"Measurement Uncertainty Validation Error: {err}", "danger")
+        return redirect(url_for("uncertainty_analysis_workspace", case_id=case_id))
+
+
+@app.route("/uncertainty-analysis/<case_id>/review/<analysis_id>", methods=["POST"])
+def uncertainty_analysis_review_route(case_id: str, analysis_id: str):
+    """Record forensic examiner review sign-off and methodological justification."""
+    case = database.get_case_by_id(case_id)
+    if not case:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": f"Case '{case_id}' not found."}), 404
+        abort(404)
+
+    existing = database.get_uncertainty_analysis_by_id(analysis_id)
+    if not existing:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": f"Analysis '{analysis_id}' not found."}), 404
+        abort(404)
+
+    if existing["case_id"] != case_id:
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "error": "Unauthorized cross-case access."}), 403
+        abort(403)
+
+    review_status = request.form.get("review_status", "Examiner Approved").strip()
+    examiner_name = request.form.get("examiner_name", "").strip() or case.get("examiner") or "Examiner"
+    examiner_notes = request.form.get("examiner_notes", "").strip()
+
+    updated = database.update_uncertainty_analysis_review(
+        analysis_id=analysis_id,
+        review_status=review_status,
+        examiner_name=examiner_name,
+        examiner_notes=examiner_notes,
+    )
+
+    if request.headers.get("Accept") == "application/json":
+        return jsonify({"status": "ok", "analysis": updated}), 200
+
+    flash(
+        f"Examiner review sign-off recorded for {analysis_id}: Status updated to '{review_status}'.",
+        "success",
+    )
+    return redirect(
+        url_for(
+            "uncertainty_analysis_workspace",
+            case_id=case_id,
+            analysis_id=analysis_id,
+        )
+    )
+
+
+@app.route("/api/uncertainty-analysis/<analysis_id>", methods=["GET"])
+def api_uncertainty_analysis_detail(analysis_id: str):
+    """Direct REST API endpoint to retrieve an uncertainty analysis record and its JSON data."""
+    rec = database.get_uncertainty_analysis_by_id(analysis_id)
+    if not rec:
+        return jsonify({"status": "error", "error": f"Analysis '{analysis_id}' not found."}), 404
+    data = json.loads(rec["analysis_data_json"]) if rec.get("analysis_data_json") else {}
+    return jsonify({"status": "ok", "record": rec, "data": data}), 200
 
 
 

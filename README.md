@@ -67,6 +67,8 @@ Then open **`http://127.0.0.1:5000`** in your web browser.
    SHA-256 cryptographic digests recorded in `reports` and `audit_logs` verify digital file integrity at the time of ingestion or PDF compilation; they do not by themselves establish physical chain of custody.
 5. **Overlapping & Complex Stain Boundaries:**
    Automated distance-transform watershed segmentation generates candidate stain boundaries based on distance map local maxima and boundary concavity defects. Under SWGSTAIN/OSAC standards, touching or merged contours must **never** be presumed to represent multiple independent droplets without morphological verification. Candidate segmentations require forensic examiner review, and indeterminate regions remain preserved as unresolved single entities. Area conservation metrics ($|A_{\text{parent}} - \sum A_{\text{children}}|$) track discretization effects.
+6. **Impact Angle Uncertainty Propagation & Scale Invariance:**
+   Analytical error propagation for $\theta = \arcsin(W/L)$ computes partial derivatives $\partial\theta/\partial W = 1/\sqrt{L^2 - W^2}$ and $\partial\theta/\partial L = -W/(L\sqrt{L^2 - W^2})$. Normalized sensitivity indices exhibit exact symmetry: $S_W = -S_L$. Isotropic calibration scaling cancels identically in the dimensionless ratio $W/L$, meaning calibration uncertainty affects physical length/width ($mm$) but does not propagate into $\theta$. Monte Carlo simulation ($N = 10,000$) provides non-linear parameter dispersion bounds; neither simulation nor analytical bounds represent an absolute physical probability of incident occurrence.
 
 ---
 
@@ -82,3 +84,4 @@ Then open **`http://127.0.0.1:5000`** in your web browser.
 - [x] **Milestone 4.5:** Complete System Integration, Scientific Validation, Security Audit & Final Release (`tests/test_phase4_final_validation.py`)
 - [x] **Milestone 5.1:** Advanced Bloodstain Pattern Classification & Analytical Decision Support (`pattern_analysis.py`, `templates/pattern_analysis.html`, `tests/test_phase5_1_pattern_analysis.py`)
 - [x] **Milestone 5.2:** Advanced Overlapping & Complex Bloodstain Pattern Analysis (`overlap_analysis.py`, `templates/overlap_analysis.html`, `tests/test_phase5_2_overlap_analysis.py`)
+- [x] **Milestone 5.3:** Advanced Uncertainty & Sensitivity Analysis (`uncertainty_analysis.py`, `templates/uncertainty_analysis.html`, `tests/test_phase5_3_uncertainty_analysis.py`)
