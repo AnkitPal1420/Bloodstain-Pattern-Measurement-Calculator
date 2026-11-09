@@ -260,6 +260,25 @@ def init_db(seed_demo: bool = False) -> None:
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_reports_report_id ON reports(report_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_reports_case_id ON reports(case_id);")
 
+    # 9. Forensic Audit Trail table (Phase 4.5 — Non-Destructive Operational Traceability)
+    # Note: Records operational timestamps and file SHA-256 integrity hashes at ingestion/generation
+    # time; does not replace physical/administrative chain-of-custody documentation.
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            action_type TEXT NOT NULL,
+            case_id TEXT,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            details TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_case_id ON audit_logs(case_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_action_type ON audit_logs(action_type);")
+
     conn.commit()
     conn.close()
 
@@ -268,9 +287,10 @@ def init_db(seed_demo: bool = False) -> None:
 
 
 def clear_all_data() -> None:
-    """Clear all records from reports, reconstruction tables, measurements, evidence_images, evidence, and cases."""
+    """Clear all records from audit_logs, reports, reconstruction tables, measurements, evidence_images, evidence, and cases."""
     conn = get_db_connection()
     try:
+        conn.execute("DELETE FROM audit_logs;")
         conn.execute("DELETE FROM reports;")
         conn.execute("DELETE FROM reconstruction_results;")
         conn.execute("DELETE FROM reconstruction_stains;")
@@ -280,8 +300,77 @@ def clear_all_data() -> None:
         conn.execute("DELETE FROM evidence;")
         conn.execute("DELETE FROM cases;")
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
+
+
+def log_audit_event(
+    action_type: str,
+    entity_type: str,
+    entity_id: Any,
+    case_id: Optional[str] = None,
+    details: str = "",
+    conn: Optional[sqlite3.Connection] = None,
+) -> int:
+    """
+    Record a forensic operational audit trail entry.
+    Note: SHA-256 hashes logged in details verify digital file integrity at ingestion/generation
+    time and do not independently establish physical chain of custody.
+    """
+    own_conn = conn is None
+    active_conn = conn if conn is not None else get_db_connection()
+    try:
+        cursor = active_conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO audit_logs (action_type, case_id, entity_type, entity_id, details)
+            VALUES (?, ?, ?, ?, ?);
+            """,
+            (
+                action_type.strip(),
+                case_id.strip() if case_id and str(case_id).strip() else None,
+                entity_type.strip(),
+                str(entity_id).strip(),
+                details.strip() if details else "",
+            ),
+        )
+        row_id = cursor.lastrowid
+        if own_conn:
+            active_conn.commit()
+        return int(row_id)
+    except Exception:
+        if own_conn:
+            active_conn.rollback()
+        raise
+    finally:
+        if own_conn:
+            active_conn.close()
+
+
+def get_audit_logs(
+    case_id: Optional[str] = None,
+    action_type: Optional[str] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """Retrieve operational audit log entries ordered newest first."""
+    conn = get_db_connection()
+    query = "SELECT * FROM audit_logs WHERE 1=1"
+    params: List[Any] = []
+    if case_id and case_id.strip():
+        query += " AND case_id = ?"
+        params.append(case_id.strip())
+    if action_type and action_type.strip():
+        query += " AND action_type = ?"
+        params.append(action_type.strip())
+    query += " ORDER BY id DESC LIMIT ?;"
+    params.append(int(limit))
+    cursor = conn.execute(query, params)
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
 
 
 def seed_demo_data() -> None:
@@ -803,8 +892,19 @@ def create_measurement(
             ),
         )
         row_id = cursor.lastrowid
+        log_audit_event(
+            action_type="Measurement Creation",
+            entity_type="measurement",
+            entity_id=row_id,
+            case_id=case_id,
+            details=f"Stain={stain_label or 'Stain-01'}, W={width:.2f}mm, L={length:.2f}mm, alpha={angle_degrees:.2f}deg",
+            conn=conn,
+        )
         conn.commit()
         return row_id
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -877,7 +977,18 @@ def create_evidence_image(
                 is_calibrated,
             ),
         )
+        log_audit_event(
+            action_type="Evidence Upload",
+            entity_type="evidence_image",
+            entity_id=image_id.strip(),
+            case_id=case_id,
+            details=f"File={original_filename.strip()} ({width_px}x{height_px}px, {file_size} bytes)",
+            conn=conn,
+        )
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
     return get_image_by_id(image_id)
@@ -1032,7 +1143,18 @@ def create_reconstruction(
                 notes.strip() if notes else "",
             ),
         )
+        log_audit_event(
+            action_type="Reconstruction Creation",
+            entity_type="reconstruction",
+            entity_id=rec_id,
+            case_id=case_id,
+            details=f"Name={reconstruction_name.strip()}, Surface={surface_type.strip() if surface_type else 'Horizontal Floor'}",
+            conn=conn,
+        )
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
     return get_reconstruction_by_id(rec_id)
@@ -1204,38 +1326,56 @@ def update_reconstruction_stain(
     new_sig = sigma_gamma_deg if sigma_gamma_deg is not None else existing["sigma_gamma_deg"]
     new_notes = examiner_notes.strip() if examiner_notes is not None else existing["examiner_notes"]
 
-    cursor.execute(
-        """
-        UPDATE reconstruction_stains
-        SET stain_identifier = ?, surface_x_mm = ?, surface_y_mm = ?,
-            direction_angle = ?, surface_type = ?, direction_source = ?,
-            sigma_gamma_deg = ?, examiner_notes = ?
-        WHERE reconstruction_id = ? AND measurement_id = ?;
-        """,
-        (
-            new_ident,
-            new_x,
-            new_y,
-            new_dir,
-            new_surf,
-            new_src,
-            new_sig,
-            new_notes,
-            reconstruction_id.strip(),
-            int(measurement_id),
-        ),
-    )
-    # Also synchronize back to measurements row for consistency
-    cursor.execute(
-        """
-        UPDATE measurements
-        SET surface_x_mm = ?, surface_y_mm = ?, direction_angle = ?, surface_type = ?
-        WHERE id = ?;
-        """,
-        (new_x, new_y, new_dir, new_surf, int(measurement_id)),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        cursor.execute(
+            """
+            UPDATE reconstruction_stains
+            SET stain_identifier = ?, surface_x_mm = ?, surface_y_mm = ?,
+                direction_angle = ?, surface_type = ?, direction_source = ?,
+                sigma_gamma_deg = ?, examiner_notes = ?
+            WHERE reconstruction_id = ? AND measurement_id = ?;
+            """,
+            (
+                new_ident,
+                new_x,
+                new_y,
+                new_dir,
+                new_surf,
+                new_src,
+                new_sig,
+                new_notes,
+                reconstruction_id.strip(),
+                int(measurement_id),
+            ),
+        )
+        # Also synchronize back to measurements row for consistency
+        cursor.execute(
+            """
+            UPDATE measurements
+            SET surface_x_mm = ?, surface_y_mm = ?, direction_angle = ?, surface_type = ?
+            WHERE id = ?;
+            """,
+            (new_x, new_y, new_dir, new_surf, int(measurement_id)),
+        )
+        rec_row = conn.execute(
+            "SELECT case_id FROM reconstructions WHERE reconstruction_id = ?;",
+            (reconstruction_id.strip(),),
+        ).fetchone()
+        rec_case_id = rec_row["case_id"] if rec_row else None
+        log_audit_event(
+            action_type="Measurement Modification",
+            entity_type="measurement",
+            entity_id=int(measurement_id),
+            case_id=rec_case_id,
+            details=f"Reconstruction={reconstruction_id.strip()}, Stain={new_ident}, X={new_x}, Y={new_y}, gamma={new_dir}",
+            conn=conn,
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
     return True
 
 
@@ -1332,7 +1472,23 @@ def save_reconstruction_result(
             "UPDATE reconstructions SET status = 'Calculated', updated_at = CURRENT_TIMESTAMP WHERE reconstruction_id = ?;",
             (reconstruction_id.strip(),),
         )
+        rec_row = conn.execute(
+            "SELECT case_id FROM reconstructions WHERE reconstruction_id = ?;",
+            (reconstruction_id.strip(),),
+        ).fetchone()
+        rec_case_id = rec_row["case_id"] if rec_row else None
+        log_audit_event(
+            action_type="Reconstruction Calculation",
+            entity_type="reconstruction",
+            entity_id=reconstruction_id.strip(),
+            case_id=rec_case_id,
+            details=f"Stains={stain_count}, Conv=({convergence_x_mm:.1f},{convergence_y_mm:.1f})mm, Z_tan={tangent_origin_z_mm:.1f}mm",
+            conn=conn,
+        )
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
     return get_latest_reconstruction_result(reconstruction_id)
@@ -1466,7 +1622,19 @@ def create_report_record(
                 sha256_hash.strip().lower(),
             ),
         )
+        act_type = "Report Revision" if int(revision_number) > 1 else "Report Generation"
+        log_audit_event(
+            action_type=act_type,
+            entity_type="report",
+            entity_id=report_id.strip(),
+            case_id=case_id,
+            details=f"Type={report_type.strip()}, Rev={int(revision_number)}, Status={report_status.strip().upper()}, SHA256={sha256_hash.strip().lower()[:16]}...",
+            conn=conn,
+        )
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
     return get_report_by_id(report_id)

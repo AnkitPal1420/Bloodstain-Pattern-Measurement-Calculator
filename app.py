@@ -619,6 +619,10 @@ def measurement_workspace():
                     if vision_data.get("calibration") and vision_data["calibration"].get("is_calibrated"):
                         scale_factor = vision_data["calibration"]["mm_per_pixel"]
                         cal_status = f"Calibrated ({vision_data['calibration']['pixels_per_mm']:.2f} px/mm)"
+                    elif active_image and active_image.get("is_calibrated") and active_image.get("scale_factor"):
+                        scale_factor = float(active_image["scale_factor"])
+                        px_per_mm = (1.0 / scale_factor) if scale_factor > 0 else 1.0
+                        cal_status = f"Calibrated ({px_per_mm:.2f} px/mm)"
                     else:
                         cal_status = "Uncalibrated Optical (Pixel Units)"
 

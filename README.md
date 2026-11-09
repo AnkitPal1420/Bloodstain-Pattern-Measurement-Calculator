@@ -1,185 +1,78 @@
-# Bloodstain Pattern Measurement Calculator 🩸
+# Bloodstain Pattern Measurement Calculator — Forensic Laboratory Suite
 
-An educational, open-source forensic science application to calculate and visualize the approximate angle of impact of bloodstains using idealized elliptical geometry.
-
----
-
-## 📌 Project Overview
-
-In forensic Bloodstain Pattern Analysis (BPA), estimating the impact angle of individual spatter stains is a foundational step in reconstructing 3D points of origin (the position of the blood source in three-dimensional space).
-
-When a spherical blood droplet strikes a surface obliquely, momentum elongates the stain into an ellipse along its path of travel:
-- **Width ($W$)**: Minor axis of the ellipse (corresponds to the diameter of the droplet upon initial contact).
-- **Length ($L$)**: Major axis of the ellipse (corresponds to the elongated distance travelled along the surface, excluding tails or spines).
-
-Using basic right-triangle trigonometry, the impact angle ($\alpha$) is calculated as:
-
-$$\sin(\alpha) = \frac{\text{Width}}{\text{Length}} \implies \alpha = \arcsin\left(\frac{\text{Width}}{\text{Length}}\right)$$
-
-Where:
-- $\alpha$ is the impact angle in degrees ($0^\circ < \alpha \le 90^\circ$).
-- A circular stain ($W = L$) represents a perpendicular $90^\circ$ drop.
-- As $\alpha$ approaches $0^\circ$, the stain becomes increasingly narrow and elongated.
+A scientific forensic analysis platform for **Bloodstain Pattern Analysis (BPA)**, combining analytical trigonometric mathematics, OpenCV digital optical contour & ellipse extraction, multi-stain 2D/3D trajectory reconstruction, interactive 3D visualization, and verifiable ReportLab forensic PDF report compilation.
 
 ---
 
-## ⚠️ Educational & Forensic Disclaimer
+## System Architecture
 
-> **Important**: This application is strictly an **educational tool** for students, educators, and introductory forensic science training. 
-> 
-> The calculations rely on idealized geometric models on smooth, non-porous surfaces. Real-world physical factors—such as impact velocity, droplet volume, surface tension, substrate porosity/texture, and secondary spatter spines—can alter stain morphology. **This software must not be used as evidence in forensic casework or legal proceedings without certified laboratory validation.**
+The application enforces strict separation of concerns across 8 specialized Python modules:
 
----
-
-## 📂 Project Structure
-
-```text
-bloodstain-pattern-measurement-calculator/
-├── app.py                   # Flask interactive laboratory web application
-├── calculator.py            # Core trigonometric calculation engine & validation
-├── database.py              # SQLite data persistence layer (cases, evidence, measurements)
-├── image_processing.py      # OpenCV computer vision module (Milestone 3)
-├── report_generator.py      # ReportLab PDF report generation (Milestone 4)
-├── database/                # SQLite persistent storage
-│   └── forensic.db
-├── templates/               # Flask Jinja2 HTML templates
-│   ├── base.html            # Master layout with responsive sidebar navigation
-│   ├── index.html           # Main Laboratory Dashboard
-│   ├── cases.html           # Case Registry with search & status filters
-│   ├── case_form.html       # Initiate New Forensic Case form
-│   ├── case_detail.html     # Case Inspection & linked evidence view
-│   ├── evidence.html        # Physical Evidence Vault
-│   ├── evidence_form.html   # Log New Evidence Item form
-│   ├── measurement.html     # Measurement Workspace (Optical staging & manual controls)
-│   └── results.html         # Results & Trajectory Dashboard
-├── static/                  # Static web assets
-│   ├── css/style.css        # Dark navy/charcoal forensic laboratory stylesheet
-│   ├── js/main.js           # Interactive client presets script & mobile menu
-│   └── images/              # Static images directory
-├── sample_images/           # Educational sample bloodstain images
-│   └── README.md
-├── assets/                  # Diagrams, figures, and UI assets
-│   └── README.md
-├── tests/                   # Automated test suite
-│   ├── __init__.py
-│   ├── test_calculator.py   # 15 Unit tests covering validation and math
-│   ├── test_app.py          # 7 Smoke and integration tests for Flask app
-│   ├── test_phase2.py       # 10 Tests for cases, evidence, and workspaces
-│   └── test_phase3.py       # 11 Tests for OpenCV computer vision & spatial calibration
-├── requirements.txt         # Project dependencies
-├── README.md                # Comprehensive project documentation
-├── .gitignore               # Ignored files (virtual environments, databases, caches)
-└── LICENSE                  # MIT Open-Source License
-```
+- **[`calculator.py`](calculator.py) (Phase 1 — Core Trigonometry & Validation):**
+  Pure analytical implementation of the bloodstain impact angle equation $\alpha = \arcsin(W / L)$, returning radians, degrees, $W/L$ ratio, perpendicular-drop classification, and forensic morphological interpretation.
+- **[`image_processing.py`](image_processing.py) (Phase 3 — OpenCV Optical Inspection):**
+  Digital image validation, CLAHE contrast enhancement, Gaussian denoising, adaptive/Otsu thresholding, external contour segmentation, Fitzgibbon direct least-squares ellipse fitting (`cv2.fitEllipse`), metric scale calibration ($\text{mm}/\text{px}$), and directional arrow overlay rendering.
+- **[`trajectory.py`](trajectory.py) (Phase 4.1 — 3D Trajectory & Convergence Mathematics):**
+  - 2D Area of Convergence via weighted least-squares minimization of perpendicular ray distances ($I - \hat{\mathbf{u}}_i \hat{\mathbf{u}}_i^T$).
+  - 3D Area of Origin via both the **Linear Stringing / Tangent Method** ($Z_i = D_i \tan\alpha_i$) and **3D Closest Point of Approach (CPA)**.
+  - Orthogonal coordinate transformations ($R^T R = I, \det(R) = +1$) between Image ($x_{\text{px}}, y_{\text{px}}$), Receiving Surface ($X_s, Y_s, Z_s$), and 3D Laboratory ($X, Y, Z$) frames (Floor, North Wall, East Wall, and Inclined Plane).
+  - First-order Jacobian uncertainty propagation ($\sigma_W, \sigma_L, \sigma_\gamma \to \sigma_\alpha, \sigma_{\text{origin}}$).
+- **[`trajectory_visualization.py`](trajectory_visualization.py) (Phase 4.2 — 2D/3D Forensic Visualization):**
+  Publication-grade dark-slate Matplotlib 2D convergence and 3D trajectory projections alongside JSON scene builders for the interactive Three.js WebGL/Canvas 3D laboratory viewer.
+- **[`trajectory_integration.py`](trajectory_integration.py) (Phase 4.3 — Measurement-to-Trajectory Bridge):**
+  Converts calibrated SQLite optical measurements and examiner-supplied directionality/surface coordinates into validated `StainTrajectoryInput` records, executes full 2D/3D reconstruction, and persists results.
+- **[`report_generator.py`](report_generator.py) (Phase 4.4 — Forensic PDF Reporting Engine):**
+  Flask-independent ReportLab A4 PDF compiler supporting three report types (**Individual Bloodstain Examination**, **Trajectory Reconstruction**, and **Complete Forensic Case Report**) with proportional image embedding, atomic file writing, revision control (`R1, R2, ...`), and SHA-256 integrity hashing.
+- **[`database.py`](database.py) (Phase 2–4.5 — SQLite Persistence & Operational Audit Trail):**
+  Parameterized SQLite data layer managing 9 relational tables (`cases`, `evidence`, `measurements`, `evidence_images`, `reconstructions`, `reconstruction_stains`, `reconstruction_results`, `reports`, and `audit_logs`) with `PRAGMA foreign_keys = ON` and automatic rollback safety.
+- **[`app.py`](app.py) (Flask Web Laboratory Controller):**
+  Routes and REST endpoints serving the Forensic Dashboard, Case & Evidence Registry, Optical Measurement Lab, Multi-Stain Reconstruction Workspace, Interactive 3D Trajectory Lab, and Forensic PDF Report Registry.
 
 ---
 
-## 🛠️ Technology Stack
+## Installation & Startup Instructions
 
-- **Python 3.14+**: Core programming language.
-- **Flask**: Lightweight WSGI web application framework.
-- **NumPy & SciPy**: Scientific computing, numerical arrays & trigonometric calculations.
-- **OpenCV (`opencv-python`) & Pillow**: Image preprocessing and ellipse contour detection (Milestone 2).
-- **Matplotlib & Pandas**: Visualization, plotting, and structured data analysis.
-- **ReportLab**: Structured PDF export (Milestone 3).
-- **pytest / unittest**: Automated test coverage.
-
----
-
-## 🚀 Getting Started
-
-### 1. Prerequisites
-Ensure you have **Python 3.10 or higher** installed on your system.
-
-### 2. Clone or Navigate to the Repository
-```bash
-cd bloodstain-pattern-measurement-calculator
-```
-
-### 3. Create and Activate a Virtual Environment
-
-**On Windows (PowerShell):**
+### 1. Environment Setup (Windows PowerShell)
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
-
-**On macOS / Linux:**
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-### 4. Install Dependencies
-```bash
+python -m venv .venv314
+.\.venv314\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
----
-
-## 🧪 Running the Unit Tests
-
-The test suite validates input sanitization, zero/negative handling, geometric bounds ($W \le L$), and angle conversions.
-
-Run tests using Python's built-in `unittest` (no extra packages needed):
+### 2. Initialize Database & Run Application
 ```powershell
-python -m unittest discover -s tests
+.\.venv314\Scripts\python.exe app.py
 ```
+Then open **`http://127.0.0.1:5000`** in your web browser.
 
-Or using `pytest`:
+### 3. Run the Automated Verification Suite
 ```powershell
-pytest -v
+.\.venv314\Scripts\python.exe -m pytest -v
 ```
 
 ---
 
-## 🌐 Launching the Flask Web Application
+## Scientific Methodology & Limitations
 
-Start the local web server:
-```powershell
-python app.py
-```
-
-Once started, open your web browser to `http://127.0.0.1:5000`.
-
----
-
-## 🧭 Project Milestones
-
-- [x] **Milestone 1: Core Engine & Validation**
-  - Implement $\alpha = \arcsin(W/L)$ with degree conversion.
-  - Strict input validation (empty values, negative numbers, zero values, $W > L$, non-numeric input).
-  - Flask user interface with presets, responsive metrics, and scientific explanations.
-  - Automated unit test suite with 100% core pass rate.
-  - Clean repository structure, `.gitignore`, and MIT License.
-
-- [x] **Milestone 2: Frontend, Dashboard & Case Management**
-  - Dark navy/charcoal laboratory design system with subtle crimson accents.
-  - SQLite persistent data layer (`database.py`) for cases, evidence items, and stain calculations.
-  - Main Dashboard with real-time laboratory metrics, recent case activities, and quick actions.
-  - Case Registry with unique Case ID generation (`BPA-YYYY-NNNN`), search, and status tracking.
-  - Physical Evidence Vault for logging patterns (Impact Spatter, Cast-off, Transfer, etc.).
-  - Measurement Workspace Interface with Phase 3 optical reticle staging and manual calculation mode.
-  - Results Dashboard with verified measurement history and trajectory placeholders.
-  - 32/32 automated tests passing with 100% pass rate.
-
-- [x] **Milestone 3: Computer Vision Optical Analysis (OpenCV)**
-  - Secure digital bloodstain photographic image acquisition (`uploads/original/`, `uploads/processed/`) and SQLite metadata tracking (`evidence_images`).
-  - Grayscale conversion, Gaussian blur, Otsu global vs Adaptive Gaussian thresholding comparison, and morphological opening/closing cleanup.
-  - Contour segmentation, candidate stain selection, and direct least-squares ellipse fitting (`cv2.fitEllipse`) with enforced $W \le L$.
-  - Interactive 2-point spatial pixel-to-millimeter calibration and multi-layer visual inspection overlays.
-  - 43/43 automated regression and computer vision tests passing with 100% pass rate.
-
-- [ ] **Milestone 4: Trajectory Projection & PDF Reporting**
-  - 2D Area of Convergence vector projection.
-  - 3D Area of Origin spatial height ($Z$) triangulation.
-  - Printable forensic case summary PDF reports via ReportLab.
+1. **Impact Angle Geometry:**
+   $$\alpha = \arcsin\left(\frac{W}{L}\right)$$
+   Valid only for well-formed elliptical bloodstains on a macroscopically planar receiving surface where $0 < W \le L$ (excluding satellite spatter, spines, or post-impact flow distortion).
+2. **180° Directional Ambiguity:**
+   An ellipse contour defines its principal major axis modulo $180^\circ$ and cannot by itself distinguish forward vs. reverse travel along that axis. Direction of travel ($\gamma \in [0^\circ, 360^\circ)$) must be independently established by the forensic examiner from tail, spine, or satellite morphology.
+3. **Straight-Line Stringing Approximation:**
+   Linear back-projection neglects aerodynamic drag and gravitational parabolic drop ($g = 9.81\text{ m/s}^2$). Consequently, straight-line triangulation systematically **overestimates** the true height of origin ($Z_{\text{linear}} \ge Z_{\text{true}}$). Computed coordinates represent an **approximate region of origin**, not an exact mathematical point source.
+4. **Digital Integrity vs. Chain of Custody:**
+   SHA-256 cryptographic digests recorded in `reports` and `audit_logs` verify digital file integrity at the time of ingestion or PDF compilation; they do not by themselves establish physical chain of custody.
 
 ---
 
-## 🛡️ Security & Ethics
-- Never commit private case files, credentials, or sensitive data.
-- Only upload openly licensed or synthetic educational images.
+## Project Milestones
 
-## 📄 License
-This project is licensed under the [MIT License](LICENSE).
+- [x] **Milestone 1:** Core Trigonometric Calculation Engine, Input Validation & CLI (`calculator.py`, `main.py`)
+- [x] **Milestone 2:** Forensic Laboratory Web UI, Case & Evidence Management (`app.py`, `database.py`, `templates/`)
+- [x] **Milestone 3:** OpenCV Optical Contour Detection, Least-Squares Ellipse Fitting & Metric Scale Calibration (`image_processing.py`)
+- [x] **Milestone 4.1:** 3D Trajectory Reconstruction & Convergence Mathematics (`trajectory.py`)
+- [x] **Milestone 4.2:** Interactive 3D Trajectory Laboratory & Scientific Visualization (`trajectory_visualization.py`)
+- [x] **Milestone 4.3:** Measurement-to-Trajectory Integration & Multi-Stain Workspace (`trajectory_integration.py`)
+- [x] **Milestone 4.4:** Professional Forensic PDF Report Generation (`report_generator.py`)
+- [x] **Milestone 4.5:** Complete System Integration, Scientific Validation, Security Audit & Final Release (`tests/test_phase4_final_validation.py`)
